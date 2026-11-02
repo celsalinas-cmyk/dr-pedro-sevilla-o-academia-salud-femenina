@@ -1662,3 +1662,338 @@ select.form-control {
         max-width: none;
     }
 }
+
+/* ==========================================================================
+   AJUSTES UX-01 a UX-06 (ADR-006 / NOVAFORGE OS)
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   UX-03: Bloque Cómo Funciona (Flujo futuro 3 pasos)
+   -------------------------------------------------------------------------- */
+.how-it-works-section {
+    margin: 50px 0 50px;
+    background: #FFFFFF;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: var(--radius-lg);
+    padding: 36px 32px;
+    box-shadow: var(--shadow-sm);
+}
+
+.how-it-works-header {
+    text-align: center;
+    max-width: 650px;
+    margin: 0 auto 30px;
+}
+
+.how-it-works-header h3 {
+    font-size: 1.85rem;
+    color: var(--midnight-blue);
+    margin-bottom: 8px;
+}
+
+.how-it-works-note {
+    font-size: 0.85rem;
+    color: var(--text-light);
+    line-height: 1.45;
+}
+
+.how-it-works-steps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+}
+
+.how-step-card {
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: var(--radius-md);
+    padding: 24px 20px;
+    text-align: center;
+    position: relative;
+    transition: var(--transition);
+}
+
+.how-step-card:hover {
+    transform: translateY(-3px);
+    border-color: var(--mauve-pink-light);
+    box-shadow: var(--shadow-sm);
+}
+
+.how-step-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--mauve-pink), var(--mauve-pink-dark));
+    color: #FFFFFF;
+    font-size: 1.25rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 14px;
+    box-shadow: 0 4px 10px rgba(199, 146, 176, 0.35);
+}
+
+.how-step-card h4 {
+    font-size: 1.15rem;
+    color: var(--midnight-blue);
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.how-step-card p {
+    font-size: 0.875rem;
+    color: var(--text-light);
+    line-height: 1.5;
+    margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   UX-04: Bloque Central Qué Incluye Cada Curso
+   -------------------------------------------------------------------------- */
+.shared-includes-box {
+    background: linear-gradient(135deg, #F8FAFC 0%, #F1F5F9 100%);
+    border: 1px solid #E2E8F0;
+    border-left: 5px solid var(--mauve-pink);
+    border-radius: var(--radius-md);
+    padding: 28px 32px;
+    margin-bottom: 36px;
+}
+
+.shared-includes-header h4 {
+    font-size: 1.25rem;
+    color: var(--midnight-blue);
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.shared-includes-header p {
+    font-size: 0.925rem;
+    color: var(--text-light);
+    margin-bottom: 18px;
+}
+
+.shared-includes-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px 24px;
+}
+
+.shared-include-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 0.885rem;
+    color: var(--text-dark);
+    line-height: 1.45;
+}
+
+.shared-include-item .check-icon {
+    color: var(--mauve-pink-dark);
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+/* Enfoque Pedagógico en Tarjetas Individuales (UX-04) */
+.single-course-focus {
+    background: rgba(199, 146, 176, 0.08);
+    border-left: 3px solid var(--mauve-pink);
+    padding: 10px 14px;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    font-size: 0.875rem;
+    color: var(--text-dark);
+    margin-bottom: 22px;
+    line-height: 1.45;
+}
+
+.single-course-focus strong {
+    color: var(--midnight-blue);
+    display: block;
+    margin-bottom: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   UX-01: CTA de Ayuda Académica en FAQ
+   -------------------------------------------------------------------------- */
+.course-help-banner {
+    margin-top: 32px;
+    padding: 22px 26px;
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    box-shadow: var(--shadow-sm);
+}
+
+.course-help-content h4 {
+    font-size: 1.05rem;
+    color: var(--midnight-blue);
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.course-help-content p {
+    font-size: 0.875rem;
+    color: var(--text-light);
+    margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   UX-05: Canales de Contacto Diferenciados (Sustitución de formulario)
+   -------------------------------------------------------------------------- */
+.contact-services-wrapper {
+    max-width: 960px;
+    margin: 0 auto;
+}
+
+.contact-services-header {
+    text-align: center;
+    margin-bottom: 40px;
+}
+
+.contact-services-header h2 {
+    color: var(--midnight-blue);
+    font-size: 2.2rem;
+    margin-bottom: 10px;
+}
+
+.contact-channels-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    margin-bottom: 32px;
+}
+
+.contact-channel-card {
+    background: #FFFFFF;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: var(--radius-lg);
+    padding: 36px 28px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--shadow-sm);
+    position: relative;
+    transition: var(--transition);
+}
+
+.contact-channel-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-md);
+}
+
+.contact-channel-card.clinical-channel {
+    border-top: 5px solid var(--mauve-pink);
+}
+
+.contact-channel-card.academic-channel {
+    border-top: 5px solid var(--midnight-blue);
+}
+
+.channel-badge {
+    display: inline-block;
+    align-self: flex-start;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: rgba(199, 146, 176, 0.15);
+    color: var(--mauve-pink-dark);
+    margin-bottom: 14px;
+}
+
+.channel-badge.academic-badge {
+    background: rgba(15, 23, 42, 0.08);
+    color: var(--midnight-blue);
+}
+
+.channel-icon {
+    font-size: 2.25rem;
+    line-height: 1;
+    margin-bottom: 12px;
+}
+
+.contact-channel-card h3 {
+    font-size: 1.35rem;
+    color: var(--midnight-blue);
+    font-weight: 700;
+    margin-bottom: 10px;
+}
+
+.channel-desc {
+    font-size: 0.925rem;
+    color: var(--text-light);
+    line-height: 1.5;
+    margin-bottom: 20px;
+    flex-grow: 1;
+}
+
+.channel-info-box {
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    margin-bottom: 22px;
+    font-size: 0.85rem;
+    color: var(--text-dark);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.staging-phase-notice {
+    background: #EFF6FF;
+    border: 1px solid #BFDBFE;
+    border-radius: var(--radius-md);
+    padding: 20px 24px;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    font-size: 0.875rem;
+    color: #1E3A8A;
+    line-height: 1.5;
+}
+
+.staging-phase-icon {
+    font-size: 1.4rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Responsive Updates UX-01..06
+   -------------------------------------------------------------------------- */
+@media (max-width: 992px) {
+    .how-it-works-steps {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+    .shared-includes-grid {
+        grid-template-columns: 1fr;
+    }
+    .contact-channels-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 768px) {
+    .how-it-works-section {
+        padding: 26px 18px;
+    }
+    .shared-includes-box {
+        padding: 20px 18px;
+    }
+    .contact-channel-card {
+        padding: 28px 20px;
+    }
+    .course-help-banner {
+        flex-direction: column;
+        align-items: stretch;
+        text-align: center;
+    }
+}
