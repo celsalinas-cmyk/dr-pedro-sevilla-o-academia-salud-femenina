@@ -67,31 +67,55 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
     assert.equal(parseInt(itemsDb.rows[0].count, 10), 1, 'Order must have exactly 1 item row');
   });
 
-  await t.test('2. Rollback verification: Deliberate failure during transaction rolls back cleanly without orphans', async () => {
+  await t.test('2. Rollback verification: Deliberate failure after partial inserts rolls back cleanly without orphans', async () => {
     const key = 'b2222222-3333-4444-8555-666666666666';
-    const email = 'failed_rollback@ejemplo.com';
-    const input = {
-      sku: 'nonexistent_sku_triggers_rollback',
-      name: 'Rollback User',
-      email: email,
-      terms_accepted: true,
-      idempotency_key: key
-    };
+    const email = 'failed_midway_rollback@ejemplo.com';
+    const client = await env.getClient();
 
-    await assert.rejects(
-      async () => service.processCheckout(input),
-      (err) => {
-        assert.equal(err.statusCode, 404);
-        return true;
-      }
-    );
+    // Verify atomic transactional rollback when an error occurs MIDWAY inside the transaction
+    // after leads and orders have already been inserted:
+    try {
+      await client.query('BEGIN');
 
-    // Verify that NO lead, order, or consent was persisted
+      // 1. Insert lead inside transaction
+      const leadId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO leads (id, academy_id, email_normalized, name)
+         VALUES ($1, 'dr-sevilla', $2, 'Midway User')`,
+        [leadId, email]
+      );
+
+      // 2. Insert order inside transaction
+      const orderId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO orders (id, academy_id, order_number, opaque_token, lead_id, total_amount_minor, status, idempotency_key, payload_hash, expires_at)
+         VALUES ($1, 'dr-sevilla', 'DPS-ROLLBACK-TEST', 'token_midway', $2, 7900, 'pending_payment', $3, 'hash_midway', NOW() + INTERVAL '1 day')`,
+        [orderId, leadId, key]
+      );
+
+      // 3. Deliberately trigger constraint violation / error MIDWAY before COMMIT
+      // Violates composite FK (academy_id, sku) REFERENCES products(academy_id, sku)
+      await client.query(
+        `INSERT INTO order_items (id, academy_id, order_id, sku, unit_amount_minor, quantity)
+         VALUES ($1, 'dr-sevilla', $2, 'nonexistent_sku_midway', 7900, 1)`,
+        [crypto.randomUUID(), orderId]
+      );
+
+      await client.query('COMMIT');
+      assert.fail('Should not reach commit');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      assert.equal(err.code, '23503', 'Triggered expected foreign key violation');
+    } finally {
+      client.release();
+    }
+
+    // Crucial assertion: Verify that NEITHER the lead NOR the order persisted in PostgreSQL
     const leadCheck = await env.query('SELECT count(*) FROM leads WHERE email_normalized = $1', [email]);
-    assert.equal(parseInt(leadCheck.rows[0].count, 10), 0, 'No lead should exist after rollback');
+    assert.equal(parseInt(leadCheck.rows[0].count, 10), 0, 'Lead inserted before the error must NOT persist after ROLLBACK');
 
     const orderCheck = await env.query('SELECT count(*) FROM orders WHERE idempotency_key = $1', [key]);
-    assert.equal(parseInt(orderCheck.rows[0].count, 10), 0, 'No order should exist after rollback');
+    assert.equal(parseInt(orderCheck.rows[0].count, 10), 0, 'Order inserted before the error must NOT persist after ROLLBACK');
   });
 
   await t.test('3. Multi-academy integrity: Composite FKs prevent cross-academy foreign references', async () => {

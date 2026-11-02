@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS academies (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Sequence for monotonic, collision-free order numbering per academy
+CREATE SEQUENCE IF NOT EXISTS order_number_seq START WITH 1001 INCREMENT BY 1;
+
 -- 2. PRODUCTS (Composite PK: academy_id, sku)
 CREATE TABLE IF NOT EXISTS products (
     academy_id VARCHAR(64) NOT NULL REFERENCES academies(id) ON DELETE RESTRICT,

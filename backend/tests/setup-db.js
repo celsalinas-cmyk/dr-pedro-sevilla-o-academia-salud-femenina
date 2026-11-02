@@ -29,6 +29,15 @@ export async function createTestDatabase() {
   const sanitizedSchema = schemaSql.replace(/DEFAULT gen_random_uuid\(\)/g, '');
   await pool.query(sanitizedSchema);
 
+  // Register nextval function in pg-mem
+  let seqCounter = 1000;
+  pgMem.public.registerFunction({
+    name: 'nextval',
+    args: [pgMem.public.getType('text')],
+    returns: pgMem.public.getType('integer'),
+    implementation: () => ++seqCounter,
+  });
+
   // 2. Seed data with explicit IDs
   const seedSql = `
     INSERT INTO academies (id, slug, legal_name, default_currency, status, billing_entity)

@@ -73,12 +73,28 @@ Pruebas ejecutadas con `pg-mem` para validación rápida en memoria:
 - `tests/isolation.test.js`: Aislamiento multi-tenant por `academy_id`, clientes independientes con mismo email y protección de tokens opacos.
 
 ### B. Pruebas de Integración sobre PostgreSQL Real (`npm run test:integration`)
-Pruebas ejecutadas contra un cluster PostgreSQL 18 real desechable provisionado localmente:
+Pruebas ejecutadas contra un cluster PostgreSQL 18 real (o mediante contenedor/base de datos externa configurada vía `TEST_DATABASE_URL`):
 - `tests/real-postgres.test.js`:
   1. **Concurrencia real (10 solicitudes paralelas):** 10 solicitudes concurrentes con la misma `idempotency_key` ejecutadas sobre PostgreSQL real. Da exactamente **1 orden creada (201 Created)**, **9 respuestas idempotentes (200 OK)** y **cero registros huérfanos**.
-  2. **Verificación de Rollback:** Fallo deliberado de SKU durante la transacción ejecuta rollback limpio; confirma que no se persisten leads, consentimientos ni órdenes parciales.
+  2. **Verificación de Rollback con Fallo Intermedio:** Se ejecutan inserciones parciales dentro de la transacción (`leads` y `orders`) y luego se detona deliberadamente un error de clave foránea antes del `COMMIT`. Se verifica que `ROLLBACK` anula absolutamente todo: ni el lead ni la orden persisten en la base de datos.
   3. **Integridad Multi-Academia con FKs Compuestas:** Intento de insertar ítems o pedidos apuntando a registros de otra academia es bloqueado a nivel de motor PostgreSQL (`SQLSTATE 23503`).
   4. **Seguridad de Errores y Sanitización HTTP 500:** Fallos de base de datos responden con un mensaje seguro y genérico `INTERNAL_SERVER_ERROR`, registrando el error internamente sin filtrar sentencias SQL, contraseñas o detalles de infraestructura al cliente.
+
+### C. Reproducibilidad Fuera de macOS (Contenedor / Base Externa)
+Las pruebas de integración en `tests/setup-real-db.js` detectan automáticamente la variable de entorno `TEST_DATABASE_URL`:
+- **En cualquier entorno CI/CD o Linux/Windows:**
+  ```bash
+  export TEST_DATABASE_URL="postgresql://postgres:password@localhost:5432/novarum_test_db"
+  npm run test:integration
+  ```
+- **Con Docker:**
+  ```bash
+  docker run --rm -d --name test-pg -e POSTGRES_PASSWORD=password -p 54329:5432 postgres:16-alpine
+  export TEST_DATABASE_URL="postgresql://postgres:password@127.0.0.1:54329/postgres"
+  npm run test:integration
+  docker stop test-pg
+  ```
+- **Por defecto en local:** Si no se define `TEST_DATABASE_URL`, se inicializa automáticamente el clúster embebido local sin configuración manual.
 
 ### C. Ejecutar Todas las Pruebas
 ```bash

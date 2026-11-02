@@ -198,12 +198,12 @@ export class CheckoutService {
         ]
       );
 
-      // 5. Generate secure, collision-free identifiers
+      // 5. Generate secure, collision-free identifiers via PostgreSQL sequence
       const orderId = crypto.randomUUID();
-      // Reliable order number: date prefix + high-entropy hex suffix (e.g. DPS-20261102-A3F8)
+      const seqRes = await client.query("SELECT nextval('order_number_seq') AS seq");
+      const seqVal = seqRes.rows[0].seq;
       const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      const uniqueSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
-      const orderNumber = `DPS-${datePart}-${uniqueSuffix}`;
+      const orderNumber = `DPS-${datePart}-${seqVal}`;
       const opaqueToken = crypto.randomBytes(32).toString('hex');
       const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours TTL
 
@@ -273,35 +273,45 @@ export class CheckoutService {
       // PostgreSQL Unique Violation (23505) error handling for race conditions
       if (err.code === '23505' || err.code === 23505 || (err.data && err.data.code === '23505')) {
         // Race condition: another concurrent process committed the order milliseconds ago
-        // Re-read committed order and apply idempotency logic
-        const existingRes = await this.db.query(
-          `SELECT order_number, opaque_token, total_amount_minor, currency, status, payload_hash, expires_at 
-           FROM orders 
-           WHERE academy_id = $1 AND idempotency_key = $2`,
-          [academyId, input.idempotency_key]
-        );
+        // Check if constraint was idempotency key
+        if (!err.constraint || err.constraint === 'uq_orders_academy_idempotency') {
+          const existingRes = await this.db.query(
+            `SELECT order_number, opaque_token, total_amount_minor, currency, status, payload_hash, expires_at 
+             FROM orders 
+             WHERE academy_id = $1 AND idempotency_key = $2`,
+            [academyId, input.idempotency_key]
+          );
 
-        if (existingRes.rows.length > 0) {
-          const existing = existingRes.rows[0];
-          if (existing.payload_hash === incomingPayloadHash) {
-            return {
-              isNew: false,
-              statusCode: 200,
-              order: {
-                order_number: existing.order_number,
-                opaque_token: existing.opaque_token,
-                total_amount_minor: existing.total_amount_minor,
-                currency: existing.currency,
-                status: existing.status,
-                expires_at: existing.expires_at
-              }
-            };
-          } else {
-            const conflictErr = new Error('The idempotency key was previously used with different checkout data.');
-            conflictErr.statusCode = 409;
-            conflictErr.code = 'IDEMPOTENCY_PAYLOAD_MISMATCH';
-            throw conflictErr;
+          if (existingRes.rows.length > 0) {
+            const existing = existingRes.rows[0];
+            if (existing.payload_hash === incomingPayloadHash) {
+              return {
+                isNew: false,
+                statusCode: 200,
+                order: {
+                  order_number: existing.order_number,
+                  opaque_token: existing.opaque_token,
+                  total_amount_minor: existing.total_amount_minor,
+                  currency: existing.currency,
+                  status: existing.status,
+                  expires_at: existing.expires_at
+                }
+              };
+            } else {
+              const conflictErr = new Error('The idempotency key was previously used with different checkout data.');
+              conflictErr.statusCode = 409;
+              conflictErr.code = 'IDEMPOTENCY_PAYLOAD_MISMATCH';
+              throw conflictErr;
+            }
           }
+        }
+
+        // If order_number conflict occurred, reject cleanly
+        if (err.constraint === 'uq_orders_academy_number') {
+          const conflictErr = new Error('Order number conflict occurred. Please retry.');
+          conflictErr.statusCode = 409;
+          conflictErr.code = 'ORDER_NUMBER_CONFLICT';
+          throw conflictErr;
         }
       }
 

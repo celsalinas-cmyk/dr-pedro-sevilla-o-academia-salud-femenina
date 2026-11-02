@@ -34,7 +34,7 @@ test('Checkout & Idempotency Suite (PostgreSQL Atomic Constraints)', async (t) =
     assert.equal(res.order.total_amount_minor, 19900); // Bs 199.00
     assert.equal(res.order.currency, 'BOB');
     assert.equal(res.order.status, 'pending_payment');
-    assert.match(res.order.order_number, /^DPS-\d{8}-[A-F0-9]{6}$/);
+    assert.match(res.order.order_number, /^DPS-\d{8}-\d+$/);
     assert.ok(res.order.opaque_token);
   });
 
