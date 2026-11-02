@@ -7,13 +7,14 @@ Este documento NO autoriza implementación de código ni despliegue.
 - [x] Mantener Moodle propio cloud.novarum.com.bo como sistema académico.
 - [x] Catálogo con 4 temas: Endometriosis, Vaginosis, SOP, Aprende Mujer (ecosistema vaginal).
 - [x] Vender curso individual o paquete de 4.
-- [x] Usar primera lección/video como muestra gratuita, sujeto a disponibilidad/permiso de publicación.
+- [x] NO regalar ningún video de los cursos; la captación se apoya en lives, podcasts y publicaciones ya disponibles en redes.
+- [x] Oferta comercial preferida: Bs 79 por curso y Bs 199 por paquete de cuatro (confirmar antes de cobro real).
 - [x] Controlar desarrollo con contratos, gates, ramas y QA; no permitir cambios arbitrarios de Codex.
 
 ## Hipótesis de implementación: no se han aprobado como hechos
-- [ ] Precio individual Bs 59 y pack Bs 149; confirmación de titular comercial y margen.
-- [ ] Si la primera lección libre corresponde a cada curso o a un video único de captación.
-- [ ] Metadatos completos y archivos de los 4 cursos (enlaces de video autorizados).
+- [ ] Confirmación comercial final de Bs 79 individual y Bs 199 pack, titular comercial y margen.
+- [x] Sin videos gratuitos de los cursos en web; material orgánico social permanece fuera del contenido de pago.
+- [ ] Verificar nombres finales, contenidos y duración de los 4 cursos, video ~10 min + SCORM + infografía + PDF/presentación + evaluación educativa.
 - [ ] Identificadores de cursos Moodle, entorno de prueba y política de acceso.
 - [ ] Método de pago QR, cuenta receptora, procedimiento de conciliación y responsable.
 - [ ] Quién factura, términos, privacidad, reembolsos y duración del acceso.
@@ -24,7 +25,7 @@ Este documento NO autoriza implementación de código ni despliegue.
 index.html contiene form#leadForm action="TU_SCRIPT_URL_AQUI"; el script no implementa persistencia. No promocionar ese formulario como captación operativa hasta corregir y probar. La navegación médica existente debe mantenerse.
 
 ## Disociación de gates
-G1 puede desarrollarse tras aprobación limitada de diseño, catálogo y assets: botones de compra en staging quedan explícitamente deshabilitados hasta backend + pago. NO mostrar compra funcional ni capturar leads en un formulario falso.
+G1 puede desarrollarse tras aprobación limitada de diseño, catálogo y textos: botones de compra en staging quedan explícitamente deshabilitados hasta backend + pago. NO mostrar compra funcional ni capturar leads en un formulario falso.
 G2 requiere selección de backend/DB, términos y consentimiento.
 G3 requiere QR conciliable, operador y configuración Moodle verificadas.
 G4 requiere pruebas end-to-end y autorización expresa para despliegue.
