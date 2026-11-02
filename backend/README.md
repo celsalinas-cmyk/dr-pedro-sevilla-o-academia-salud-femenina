@@ -9,8 +9,6 @@ Primer tenant en producción: **Dr. Pedro Sevilla — Academia Mujer Sana** (`dr
 
 - **Node.js**: v20.x o superior (`node -v`)
 - **npm**: v10.x o superior (`npm -v`)
-- **PostgreSQL**: v15.x o superior (o Docker) para ejecución con base de datos real.
-  *Para testing unitario y de concurrencia, el proyecto incluye entorno in-memory con `pg-mem` sin dependencias externas.*
 
 ---
 
@@ -34,7 +32,7 @@ Primer tenant en producción: **Dr. Pedro Sevilla — Academia Mujer Sana** (`dr
 
    Variables clave:
    - `DEFAULT_ACADEMY_ID`: `dr-sevilla` (inyección autoritativa en backend; zero-trust al navegador).
-   - `DATABASE_URL`: Cadena de conexión PostgreSQL (ej. `postgresql://postgres:postgres@localhost:5432/novarum_b2c_commerce`).
+   - `DATABASE_URL`: Cadena de conexión PostgreSQL (ej. `postgresql://postgres:password@localhost:5432/novarum_b2c_commerce`).
    - `ALLOWED_ORIGINS`: `https://pedrosevilla.novaforge.group,http://127.0.0.1:3000`.
    - `PORT`: `3000`.
 
@@ -48,7 +46,7 @@ npm run migrate
 ```
 
 Las migraciones aplican:
-- `migrations/001_initial_schema.sql`: Tablas `academies`, `products`, `prices`, `leads`, `consents`, `orders`, `order_items`, `order_events` con constraints atómicos e índices compuestos por `academy_id`.
+- `migrations/001_initial_schema.sql`: Tablas `academies`, `products`, `prices`, `leads`, `consents`, `orders`, `order_items`, `order_events` con claves foráneas compuestas estrictas `(academy_id, ...)` que impiden cualquier referencia foránea cruzada entre academias.
 - `migrations/002_seed_dr_sevilla.sql`: Configuración de tenant `dr-sevilla`, 5 productos formativos y catálogo de precios inmutables (Bs 79 individual / Bs 199 pack).
 
 ---
@@ -67,31 +65,23 @@ El servidor quedará disponible en `http://127.0.0.1:3000` con los siguientes en
 
 ## 5. Ejecución de la Suite de Pruebas Automatizadas
 
+El proyecto cuenta con dos niveles de pruebas rigurosamente separados:
+
+### A. Pruebas Unitarias Rápidas (`npm run test:unit`)
+Pruebas ejecutadas con `pg-mem` para validación rápida en memoria:
+- `tests/checkout.test.js`: Validación de precios server-side, reintentos idempotentes (200 OK), conflicto de payload (409 Conflict), control de concurrencia y validación estricta de schema (Data Minimization).
+- `tests/isolation.test.js`: Aislamiento multi-tenant por `academy_id`, clientes independientes con mismo email y protección de tokens opacos.
+
+### B. Pruebas de Integración sobre PostgreSQL Real (`npm run test:integration`)
+Pruebas ejecutadas contra un cluster PostgreSQL 18 real desechable provisionado localmente:
+- `tests/real-postgres.test.js`:
+  1. **Concurrencia real (10 solicitudes paralelas):** 10 solicitudes concurrentes con la misma `idempotency_key` ejecutadas sobre PostgreSQL real. Da exactamente **1 orden creada (201 Created)**, **9 respuestas idempotentes (200 OK)** y **cero registros huérfanos**.
+  2. **Verificación de Rollback:** Fallo deliberado de SKU durante la transacción ejecuta rollback limpio; confirma que no se persisten leads, consentimientos ni órdenes parciales.
+  3. **Integridad Multi-Academia con FKs Compuestas:** Intento de insertar ítems o pedidos apuntando a registros de otra academia es bloqueado a nivel de motor PostgreSQL (`SQLSTATE 23503`).
+  4. **Seguridad de Errores y Sanitización HTTP 500:** Fallos de base de datos responden con un mensaje seguro y genérico `INTERNAL_SERVER_ERROR`, registrando el error internamente sin filtrar sentencias SQL, contraseñas o detalles de infraestructura al cliente.
+
+### C. Ejecutar Todas las Pruebas
 ```bash
-npm test
+npm run test:all
 ```
-
-La suite cubre 11 pruebas automatizadas estructuradas en dos suites principales:
-
-### Suite 1: Checkout & Idempotency (`tests/checkout.test.js`)
-1. **Precios Server-Side:** Creación de pedido con precio inmutable de base de datos (`Bs 199` para el pack de cuatro cursos).
-2. **Reintento Idempotente:** Envío idéntico con la misma `idempotency_key` devuelve el pedido original (`200 OK`) sin duplicar.
-3. **Conflicto de Idempotencia:** Reutilización de `idempotency_key` con payload modificado responde `HTTP 409 Conflict (IDEMPOTENCY_PAYLOAD_MISMATCH)` sin alterar registros.
-4. **Concurrencia Atómica:** 5 peticiones simultáneas paralelas resultan en exactamente 1 orden creada (`201 Created`) y 4 reintentos (`200 OK`). 0 registros duplicados en base de datos.
-5. **Minimización de Datos:** Rechazo con `HTTP 422` ante nombres inválidos, correos mal formateados o términos no aceptados; `HTTP 404` ante SKUs no catalogados.
-6. **Zero PII:** Verificación de que la consulta de estado expone solo `order_number`, `status`, `sku` e importe, sin datos personales.
-
-### Suite 2: Multi-Tenant Isolation (`tests/isolation.test.js`)
-1. **Rechazo de Producto Ajeno:** El servicio `dr-sevilla` rechaza comprar productos de otro tenant con `HTTP 404 (PRODUCT_NOT_FOUND)`.
-2. **Leads Aislados:** Clientes con el mismo correo electrónico en distintas academias generan registros de lead completamente independientes mediante `UNIQUE (academy_id, email_normalized)`.
-3. **Tokens Criptográficos Aislados:** Un tenant no puede consultar ni inferir órdenes de otra academia mediante su `opaque_token` (`HTTP 404`).
-
----
-
-## 6. Compatibilidad con Google Cloud Run
-
-El código fuente es totalmente stateless y modular:
-- Sin almacenamiento en disco local ni variables de estado en memoria.
-- Resuelve `academy_id` mediante variables seguras de entorno inyectadas por Secret Manager.
-- Logs estructurados con serializadores que eliminan PII automáticamente.
-- Listo para ser empaquetado en contenedor Docker estándar.
+Total: **16 pruebas (16/16 PASS)**.

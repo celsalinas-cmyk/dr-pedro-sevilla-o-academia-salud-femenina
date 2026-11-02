@@ -1,6 +1,6 @@
 -- 001_initial_schema.sql
 -- NOVARUM Commerce Engine - Gate 2-A1 Schema
--- Multi-tenant B2C Architecture with strict academy_id isolation
+-- Multi-tenant B2C Architecture with strict composite academy_id isolation
 
 -- 1. ACADEMIES
 CREATE TABLE IF NOT EXISTS academies (
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS products (
     PRIMARY KEY (academy_id, sku)
 );
 
--- 3. PRICES
+-- 3. PRICES (Composite FK: academy_id, sku -> products)
 CREATE TABLE IF NOT EXISTS prices (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     academy_id VARCHAR(64) NOT NULL,
@@ -54,30 +54,31 @@ CREATE TABLE IF NOT EXISTS leads (
     utm_content VARCHAR(100),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_leads_academy_email UNIQUE (academy_id, email_normalized)
+    CONSTRAINT uq_leads_academy_email UNIQUE (academy_id, email_normalized),
+    CONSTRAINT uq_leads_academy_lead_id UNIQUE (academy_id, id)
 );
 
--- 5. CONSENTS (Audit trail of legal consent)
+-- 5. CONSENTS (Composite FK: academy_id, lead_id -> leads)
 CREATE TABLE IF NOT EXISTS consents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    academy_id VARCHAR(64) NOT NULL REFERENCES academies(id) ON DELETE RESTRICT,
-    lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    academy_id VARCHAR(64) NOT NULL,
+    lead_id UUID NOT NULL,
     privacy_version VARCHAR(32) NOT NULL,
     terms_accepted BOOLEAN NOT NULL DEFAULT TRUE,
     terms_accepted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
-    ip_hash VARCHAR(64),
     user_agent TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (academy_id, lead_id) REFERENCES leads(academy_id, id) ON DELETE CASCADE
 );
 
--- 6. ORDERS (Strict atomic idempotency per academy_id, idempotency_key)
+-- 6. ORDERS (Strict composite FK: academy_id, lead_id -> leads; unique per academy_id, idempotency_key)
 CREATE TABLE IF NOT EXISTS orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    academy_id VARCHAR(64) NOT NULL REFERENCES academies(id) ON DELETE RESTRICT,
+    academy_id VARCHAR(64) NOT NULL,
     order_number VARCHAR(64) NOT NULL,
     opaque_token VARCHAR(128) NOT NULL UNIQUE,
-    lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE RESTRICT,
+    lead_id UUID NOT NULL,
     currency VARCHAR(3) NOT NULL DEFAULT 'BOB',
     total_amount_minor INTEGER NOT NULL CHECK (total_amount_minor > 0),
     status VARCHAR(32) NOT NULL DEFAULT 'pending_payment',
@@ -86,29 +87,33 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT uq_orders_academy_idempotency UNIQUE (academy_id, idempotency_key),
-    CONSTRAINT uq_orders_academy_number UNIQUE (academy_id, order_number)
+    CONSTRAINT uq_orders_academy_number UNIQUE (academy_id, order_number),
+    CONSTRAINT uq_orders_academy_order_id UNIQUE (academy_id, id),
+    FOREIGN KEY (academy_id, lead_id) REFERENCES leads(academy_id, id) ON DELETE RESTRICT
 );
 
--- 7. ORDER_ITEMS
+-- 7. ORDER_ITEMS (Composite FKs: (academy_id, order_id) -> orders, (academy_id, sku) -> products)
 CREATE TABLE IF NOT EXISTS order_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     academy_id VARCHAR(64) NOT NULL,
-    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    order_id UUID NOT NULL,
     sku VARCHAR(64) NOT NULL,
     unit_amount_minor INTEGER NOT NULL CHECK (unit_amount_minor > 0),
     quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    FOREIGN KEY (academy_id, order_id) REFERENCES orders(academy_id, id) ON DELETE CASCADE,
     FOREIGN KEY (academy_id, sku) REFERENCES products(academy_id, sku) ON DELETE RESTRICT
 );
 
--- 8. ORDER_EVENTS (Immutable state transition audit log)
+-- 8. ORDER_EVENTS (Composite FK: (academy_id, order_id) -> orders)
 CREATE TABLE IF NOT EXISTS order_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    academy_id VARCHAR(64) NOT NULL REFERENCES academies(id) ON DELETE RESTRICT,
-    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    academy_id VARCHAR(64) NOT NULL,
+    order_id UUID NOT NULL,
     previous_status VARCHAR(32),
     new_status VARCHAR(32) NOT NULL,
     reason TEXT,
     operator_id VARCHAR(64),
     metadata JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (academy_id, order_id) REFERENCES orders(academy_id, id) ON DELETE CASCADE
 );

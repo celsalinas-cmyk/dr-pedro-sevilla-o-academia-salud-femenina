@@ -43,6 +43,30 @@ export async function buildApp(customDb = db) {
 
   const checkoutService = new CheckoutService(customDb, config.defaultAcademyId);
 
+  // Global Error Handler for Controlled, Sanitized Responses
+  app.setErrorHandler((error, request, reply) => {
+    const statusCode = error.statusCode || 500;
+    
+    // Log sanitized error internally without exposing SQL or stack trace to client
+    request.log.error({
+      errCode: error.code,
+      message: error.message,
+      statusCode,
+    }, 'Handled application error');
+
+    if (statusCode >= 500) {
+      return reply.code(500).send({
+        error: 'INTERNAL_SERVER_ERROR',
+        message: 'An unexpected internal error occurred. Please contact support.',
+      });
+    }
+
+    return reply.code(statusCode).send({
+      error: error.code || 'BAD_REQUEST',
+      message: error.message,
+    });
+  });
+
   // Health check endpoint
   app.get('/health', async () => {
     return { status: 'healthy', academy: config.defaultAcademyId };
@@ -50,35 +74,18 @@ export async function buildApp(customDb = db) {
 
   // POST /api/v1/checkout
   app.post('/api/v1/checkout', async (request, reply) => {
-    try {
-      const clientIp = request.ip;
-      const userAgent = request.headers['user-agent'] || '';
-      
-      const result = await checkoutService.processCheckout(request.body || {}, clientIp, userAgent);
-      
-      return reply.code(result.statusCode).send(result.order);
-    } catch (err) {
-      const statusCode = err.statusCode || 500;
-      return reply.code(statusCode).send({
-        error: err.code || 'INTERNAL_ERROR',
-        message: err.message,
-      });
-    }
+    const clientIp = request.ip;
+    const userAgent = request.headers['user-agent'] || '';
+    
+    const result = await checkoutService.processCheckout(request.body || {}, clientIp, userAgent);
+    return reply.code(result.statusCode).send(result.order);
   });
 
   // GET /api/v1/orders/:opaque_token/status (Zero PII)
   app.get('/api/v1/orders/:opaque_token/status', async (request, reply) => {
-    try {
-      const { opaque_token } = request.params;
-      const order = await checkoutService.getOrderStatus(opaque_token);
-      return reply.send(order);
-    } catch (err) {
-      const statusCode = err.statusCode || 500;
-      return reply.code(statusCode).send({
-        error: err.code || 'INTERNAL_ERROR',
-        message: err.message,
-      });
-    }
+    const { opaque_token } = request.params;
+    const order = await checkoutService.getOrderStatus(opaque_token);
+    return reply.send(order);
   });
 
   return app;

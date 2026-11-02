@@ -8,6 +8,7 @@ export class CheckoutService {
 
   /**
    * Generates a deterministic canonical hash of the checkout intent.
+   * Includes the complete set of relevant checkout data to detect payload conflicts.
    */
   calculatePayloadHash(data) {
     const canonicalString = [
@@ -16,6 +17,7 @@ export class CheckoutService {
       (data.name || '').trim(),
       (data.phone || '').trim(),
       data.terms_accepted ? 'true' : 'false',
+      data.marketing_opt_in ? 'true' : 'false',
       data.privacy_version || 'v1.0'
     ].join('|');
 
@@ -180,12 +182,11 @@ export class CheckoutService {
 
       const actualLeadId = leadRes.rows[0].id;
 
-      // 4. Record Consent
+      // 4. Record Consent (without fixed salt IP hash, preserving privacy)
       const consentId = crypto.randomUUID();
-      const ipHash = crypto.createHash('sha256').update(clientIp + 'salt').digest('hex').substring(0, 32);
       await client.query(
-        `INSERT INTO consents (id, academy_id, lead_id, privacy_version, terms_accepted, marketing_opt_in, ip_hash, user_agent)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        `INSERT INTO consents (id, academy_id, lead_id, privacy_version, terms_accepted, marketing_opt_in, user_agent)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
           consentId,
           academyId,
@@ -193,15 +194,16 @@ export class CheckoutService {
           input.privacy_version || 'v1.0',
           true,
           input.marketing_opt_in === true,
-          ipHash,
           userAgent.substring(0, 255)
         ]
       );
 
-      // 5. Generate secure identifiers
+      // 5. Generate secure, collision-free identifiers
       const orderId = crypto.randomUUID();
-      const randomSuffix = crypto.randomInt(1000, 9999);
-      const orderNumber = `DPS-2026-${randomSuffix}`;
+      // Reliable order number: date prefix + high-entropy hex suffix (e.g. DPS-20261102-A3F8)
+      const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const uniqueSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const orderNumber = `DPS-${datePart}-${uniqueSuffix}`;
       const opaqueToken = crypto.randomBytes(32).toString('hex');
       const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours TTL
 
