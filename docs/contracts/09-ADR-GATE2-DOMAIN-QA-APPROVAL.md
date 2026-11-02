@@ -2,7 +2,7 @@
 Fecha: 2026-11-01 | Estado: DECISIONES APROBADAS PARA ACTUALIZAR DISEÑO / PLAN-ONLY
 
 ## Dominio canónico confirmado por Product Owner
-**https://pedroservilla.novaforge.group** (grafía exacta: servilla).
+**https://pedrosevilla.novaforge.group** (grafía exacta: sevilla).
 Sustituye referencias anteriores a drpedrosevilla.com, pedrosevilla.novaforge.group y otros nombres propuestos en documentos de arquitectura Gate 2. La ruta pública y TLS deben ser comprobados por el implementador antes de configurar CORS u orígenes de producción. El origen de staging no está confirmado: no inventarlo.
 
 ## Aprobación de observaciones QA
