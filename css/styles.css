@@ -1580,3 +1580,85 @@ select.form-control {
         font-size: 0.85rem;
     }
 }
+
+/* --------------------------------------------------------------------------
+   Toast No Intrusivo y Accesible para Staging
+   -------------------------------------------------------------------------- */
+.staging-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    max-width: 440px;
+    background: #0F172A;
+    color: #FFFFFF;
+    padding: 16px 20px;
+    border-radius: var(--radius-md);
+    box-shadow: 0 12px 28px -5px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.12);
+    font-size: 0.9rem;
+    line-height: 1.45;
+    z-index: 9999;
+    opacity: 0;
+    transform: translateY(16px);
+    pointer-events: none;
+    transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.staging-toast.show {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.staging-toast-icon {
+    font-size: 1.25rem;
+    line-height: 1;
+    color: var(--mauve-pink);
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.staging-toast-content {
+    flex-grow: 1;
+}
+
+.staging-toast-title {
+    font-weight: 700;
+    margin-bottom: 3px;
+    color: #FFFFFF;
+    font-size: 0.925rem;
+}
+
+.staging-toast-desc {
+    font-size: 0.85rem;
+    color: #CBD5E1;
+    margin: 0;
+    line-height: 1.4;
+}
+
+.staging-toast-close {
+    background: transparent;
+    border: none;
+    color: #94A3B8;
+    font-size: 1.35rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    margin-left: 6px;
+    transition: color 0.2s;
+}
+
+.staging-toast-close:hover {
+    color: #FFFFFF;
+}
+
+@media (max-width: 768px) {
+    .staging-toast {
+        bottom: 16px;
+        right: 16px;
+        left: 16px;
+        max-width: none;
+    }
+}
