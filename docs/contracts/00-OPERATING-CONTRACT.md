@@ -9,11 +9,11 @@ Convertir tráfico TikTok/Instagram a leads identificados, pedidos pagados y mat
 Web pública pedrosevilla.novaforge.group, implementación HTML/CSS/JS simple; repositorio actual contiene index.html y css/styles.css. Formulario existente tiene action="TU_SCRIPT_URL_AQUI" y NO captura confirmada. Moodle propio cloud.novarum.com.bo, sin configuración API verificada. Cuatro temas: Endometriosis, Vaginosis, SOP, Aprende Mujer (microbiota/ecosistema vaginal). No están confirmados IDs Moodle, archivos MP4 de vista previa, cuenta bancaria ni proveedor de pagos.
 
 ## Oferta propuesta (PENDIENTE aprobación)
-Lección inicial gratuita sin login; cursos completos individuales Bs 59; pack de cuatro Bs 149; condiciones de acceso, impuestos, política de reembolso y propietario de cobro a definir. Nunca mostrar precio como final ni cobrar antes de aprobación. No confundir video gratis con curso completo gratis.
+Sin lecciones gratuitas de pago: redes sociales, podcasts y lives cumplen función de captación. Oferta propuesta: curso completo individual Bs 79; pack cuatro Bs 199. La aprobación definitiva de precios, impuestos, acceso, reembolsos y titular comercial sigue pendiente. Ningún material de curso se publica gratuitamente por defecto.
 
 ## In scope MVP
 1. Conservar estética y estructura de la web actual y atención médica existente.
-2. Sección comercial mobile-first con cuatro productos, descripción aprobada, vista previa gratuita solo si archivo autorizado, botones de compra individual/pack y etiquetas UTM.
+2. Sección comercial mobile-first con cuatro productos, descripción aprobada, descripción detallada de componentes educativos, botones de compra individual/pack y etiquetas UTM.
 3. Captación real de consentimiento y pedido; identificador único de lead/pedido; deduplicación; protección antispam.
 4. Pago QR inicialmente con conciliación humana comprobada (nunca confiar solo en captura); estados auditables.
 5. Alta/matrícula Moodle por operador como fallback si API aún no habilitada; integración automatizada en fase posterior tras prueba y permisos.
