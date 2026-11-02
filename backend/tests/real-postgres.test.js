@@ -15,6 +15,12 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
     // Test environment uses a strict max=5 connection pool as demanded by Codex review!
     env = new RealPostgresTestEnvironment(54329, 5);
     await env.start();
+
+    // Ensure pristine test isolation: purge any residual transactional data
+    await env.query(`
+      TRUNCATE TABLE order_events, order_items, orders, consent_records, leads CASCADE;
+    `);
+
     service = new CheckoutService(env, 'dr-sevilla');
     app = await buildApp(env, { rateLimitMax: 5 }); // strict limit for test
   });
@@ -25,11 +31,12 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
   });
 
   await t.test('1. Concurrency under pool max=5: 10 concurrent requests yield 1 created (201) and 9 idempotent (200)', async () => {
-    const key = 'a1111111-2222-4333-8444-555555555555';
+    const key = crypto.randomUUID();
+    const email = `natalia_${Date.now()}@ejemplo.com`;
     const input = {
       sku: 'mujer-informada-4',
       name: 'Natalia Castro',
-      email: 'natalia@ejemplo.com',
+      email: email,
       phone: '+59170011223',
       terms_accepted: true,
       marketing_opt_in: false,
@@ -62,7 +69,7 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
     const orderDb = await env.query('SELECT count(*) FROM orders WHERE idempotency_key = $1', [key]);
     assert.equal(parseInt(orderDb.rows[0].count, 10), 1, 'Database must have exactly 1 order row');
 
-    const leadDb = await env.query('SELECT count(*) FROM leads WHERE email_normalized = $1', ['natalia@ejemplo.com']);
+    const leadDb = await env.query('SELECT count(*) FROM leads WHERE email_normalized = $1', [email]);
     assert.equal(parseInt(leadDb.rows[0].count, 10), 1, 'Database must have exactly 1 lead row');
 
     const orderId = (await env.query('SELECT id FROM orders WHERE idempotency_key = $1', [key])).rows[0].id;
@@ -151,19 +158,21 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
       ON CONFLICT DO NOTHING;
     `);
 
+    const suffix = crypto.randomUUID().slice(0, 8);
+
     // Create an order under 'dr-sevilla'
     const leadRes = await env.query(`
       INSERT INTO leads (academy_id, email_normalized, name)
-      VALUES ('dr-sevilla', 'lead_test_fk@ejemplo.com', 'FK Test')
+      VALUES ('dr-sevilla', $1, 'FK Test')
       RETURNING id;
-    `);
+    `, [`lead_test_fk_${suffix}@ejemplo.com`]);
     const leadId = leadRes.rows[0].id;
 
     const orderRes = await env.query(`
       INSERT INTO orders (academy_id, order_number, opaque_token, lead_id, total_amount_minor, status, idempotency_key, payload_hash, expires_at, token_expires_at)
-      VALUES ('dr-sevilla', 'DPS-TEST-FK-2', 'token_fk_test_2', $1, 7900, 'pending_payment', 'c3333333-4444-4555-8666-777777777777', 'hash', NOW() + INTERVAL '1 day', NOW() + INTERVAL '30 days')
+      VALUES ('dr-sevilla', $1, $2, $3, 7900, 'pending_payment', $4, 'hash', NOW() + INTERVAL '1 day', NOW() + INTERVAL '30 days')
       RETURNING id;
-    `, [leadId]);
+    `, [`DPS-TEST-FK-${suffix}`, `token_fk_test_${suffix}`, leadId, crypto.randomUUID()]);
     const orderId = orderRes.rows[0].id;
 
     // Negative test 1: Insert order_item pointing to order under 'dr-sevilla' BUT with sku from 'other-academy'
@@ -183,17 +192,17 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
     // Negative test 2: Attempt to insert an order with lead_id from 'other-academy'
     const otherLeadRes = await env.query(`
       INSERT INTO leads (academy_id, email_normalized, name)
-      VALUES ('other-academy', 'other_lead_2@ejemplo.com', 'Other Lead')
+      VALUES ('other-academy', $1, 'Other Lead')
       RETURNING id;
-    `);
+    `, [`other_lead_${suffix}@ejemplo.com`]);
     const otherLeadId = otherLeadRes.rows[0].id;
 
     await assert.rejects(
       async () => {
         await env.query(`
           INSERT INTO orders (academy_id, order_number, opaque_token, lead_id, total_amount_minor, status, idempotency_key, payload_hash, expires_at, token_expires_at)
-          VALUES ('dr-sevilla', 'DPS-CROSS-ACADEMY-2', 'token_cross_2', $1, 7900, 'pending_payment', 'd4444444-5555-4666-8777-888888888888', 'hash', NOW() + INTERVAL '1 day', NOW() + INTERVAL '30 days');
-        `, [otherLeadId]);
+          VALUES ('dr-sevilla', $1, $2, $3, 7900, 'pending_payment', $4, 'hash', NOW() + INTERVAL '1 day', NOW() + INTERVAL '30 days');
+        `, [`DPS-CROSS-ACADEMY-${suffix}`, `token_cross_${suffix}`, otherLeadId, crypto.randomUUID()]);
       },
       (err) => {
         assert.equal(err.code, '23503', 'Composite FK (academy_id, lead_id) must reject cross-academy lead reference');
