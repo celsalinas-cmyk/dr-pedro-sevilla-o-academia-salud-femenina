@@ -126,18 +126,19 @@ test('Checkout & Idempotency Suite (Unit / pg-mem)', async (t) => {
     assert.equal(parseInt(countRes.rows[0].count, 10), 1, 'Database must have exactly 1 order row');
   });
 
-  await t.test('5. Lead Identity Preservation: Anonymous checkout does NOT overwrite existing lead name', async () => {
-    // 1. Existing lead registered previously with verified name
+  await t.test('5. Lead Identity Preservation: Anonymous checkout does NOT overwrite existing lead name or phone', async () => {
+    // 1. Existing lead registered previously with verified name and phone=NULL
     await testDb.query(
       `INSERT INTO leads (id, academy_id, email_normalized, name, phone)
-       VALUES ('11111111-2222-4333-8444-555555555555', 'dr-sevilla', 'daniela@ejemplo.com', 'Daniela Original', '+59170011223')`
+       VALUES ('11111111-2222-4333-8444-555555555555', 'dr-sevilla', 'daniela@ejemplo.com', 'Daniela Original', NULL)`
     );
 
-    // 2. Someone initiates checkout with same email but attempts to overwrite name
+    // 2. Someone initiates checkout with same email and tries to set phone or change name
     const input = {
       sku: 'endometriosis',
       name: 'Daniela Impostor',
       email: 'daniela@ejemplo.com',
+      phone: '+59179998877',
       terms_accepted: true,
       idempotency_key: 'e0000000-0000-4000-8000-000000000001'
     };
@@ -145,12 +146,12 @@ test('Checkout & Idempotency Suite (Unit / pg-mem)', async (t) => {
     const res = await service.processCheckout(input);
     assert.equal(res.statusCode, 201);
 
-    // 3. Verify lead name was PRESERVED in database
+    // 3. Verify lead name and phone were PRESERVED untouched in database
     const leadRes = await testDb.query(
       "SELECT name, phone FROM leads WHERE academy_id = 'dr-sevilla' AND email_normalized = 'daniela@ejemplo.com'"
     );
     assert.equal(leadRes.rows[0].name, 'Daniela Original', 'Lead name must not be overwritten by subsequent checkouts');
-    assert.equal(leadRes.rows[0].phone, '+59170011223');
+    assert.equal(leadRes.rows[0].phone, null, 'Lead phone must remain NULL if it was NULL (zero anonymous overwrite)');
   });
 
   await t.test('6. UTM Strict Validation: Rejects invalid or dangerous characters', async () => {

@@ -126,8 +126,12 @@ export class CheckoutService {
 
   /**
    * Atomic transactional checkout with strict idempotency, connection safety, and lead preservation.
+   * @param {Object} input - Checkout request payload
+   * @param {string} clientIp - Client IP
+   * @param {string} userAgent - User agent
+   * @param {Object} opts - Optional test hooks (e.g. injectFailureBeforeCommit)
    */
-  async processCheckout(input, clientIp = '127.0.0.1', userAgent = '') {
+  async processCheckout(input, clientIp = '127.0.0.1', userAgent = '', opts = {}) {
     const validationErrors = this.validateCheckoutInput(input);
     if (validationErrors.length > 0) {
       const err = new Error(validationErrors.join(' '));
@@ -203,16 +207,14 @@ export class CheckoutService {
       const { amount_minor, currency } = priceRes.rows[0];
 
       // 3. Lead Identity Preservation:
-      // Insert if not exists. If lead exists, DO NOT overwrite existing name or phone from anonymous checkout!
-      // Only fill phone if existing phone was NULL.
+      // An anonymous checkout MUST NOT modify ANY field of an existing lead, including phone even if NULL.
+      // Insert if not exists. If already exists, do nothing (DO NOTHING) and retrieve existing ID.
       const leadId = crypto.randomUUID();
       const leadRes = await client.query(
         `INSERT INTO leads (id, academy_id, email_normalized, name, phone)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (academy_id, email_normalized) 
-         DO UPDATE SET 
-            phone = COALESCE(leads.phone, EXCLUDED.phone),
-            updated_at = NOW()
+         DO NOTHING
          RETURNING id, name, phone`,
         [
           leadId,
@@ -223,7 +225,17 @@ export class CheckoutService {
         ]
       );
 
-      const actualLeadId = leadRes.rows[0].id;
+      let actualLeadId;
+      if (leadRes.rows.length > 0) {
+        actualLeadId = leadRes.rows[0].id;
+      } else {
+        // Lead already exists: fetch existing record without updating any fields
+        const existingLead = await client.query(
+          `SELECT id, name, phone FROM leads WHERE academy_id = $1 AND email_normalized = $2`,
+          [academyId, emailNormalized]
+        );
+        actualLeadId = existingLead.rows[0].id;
+      }
 
       // 4. Record Consent
       const consentId = crypto.randomUUID();
@@ -310,6 +322,11 @@ export class CheckoutService {
           })
         ]
       );
+
+      // Injected failure hook for testing transactional rollback from service
+      if (opts.injectFailureBeforeCommit) {
+        throw new Error('INJECTED_TRANSACTION_FAILURE_BEFORE_COMMIT');
+      }
 
       await client.query('COMMIT');
 
@@ -422,18 +439,36 @@ export class CheckoutService {
       throw err;
     }
 
-    // Lazy expiration of unpaid orders past expires_at
+    // Atomic Lazy expiration in transaction:
+    // UPDATE orders SET status = 'expired' WHERE status = 'pending_payment' AND expires_at < now()
+    // AND INSERT INTO order_events in same transaction
     if (order.status === 'pending_payment' && new Date(order.expires_at) < now) {
-      await this.db.query(
-        `UPDATE orders SET status = 'expired' WHERE id = $1 AND academy_id = $2`,
-        [order.id, academyId]
-      );
-      await this.db.query(
-        `INSERT INTO order_events (id, academy_id, order_id, previous_status, new_status, reason)
-         VALUES ($1, $2, $3, 'pending_payment', 'expired', 'Order payment window elapsed (72h)')`,
-        [crypto.randomUUID(), academyId, order.id]
-      );
-      order.status = 'expired';
+      const client = await this.db.getClient();
+      try {
+        await client.query('BEGIN');
+        const updateRes = await client.query(
+          `UPDATE orders 
+           SET status = 'expired' 
+           WHERE id = $1 AND academy_id = $2 AND status = 'pending_payment'
+           RETURNING id`,
+          [order.id, academyId]
+        );
+
+        if (updateRes.rows.length > 0) {
+          await client.query(
+            `INSERT INTO order_events (id, academy_id, order_id, previous_status, new_status, reason)
+             VALUES ($1, $2, $3, 'pending_payment', 'expired', 'Order payment window elapsed (72h)')`,
+            [crypto.randomUUID(), academyId, order.id]
+          );
+          order.status = 'expired';
+        }
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
     }
 
     return {

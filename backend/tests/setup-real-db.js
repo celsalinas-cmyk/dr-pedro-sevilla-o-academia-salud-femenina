@@ -1,8 +1,8 @@
-import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { runMigrations } from '../src/db/migrate.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,17 +27,25 @@ export class RealPostgresTestEnvironment {
       console.log(`[Test DB] Using external PostgreSQL at: ${this.externalDbUrl.replace(/:[^:@]+@/, ':***@')}`);
       connectionString = this.externalDbUrl;
     } else {
-      // Otherwise, use portable embedded-postgres (supports macOS, Linux x64/arm64, Windows)
-      this.embedded = new EmbeddedPostgres({
-        port: this.port,
-        user: 'postgres',
-        password: 'password',
-        persistent: false,
-        dataDir: this.dataDir
-      });
-      await this.embedded.initialise();
-      await this.embedded.start();
-      connectionString = `postgresql://postgres:password@127.0.0.1:${this.port}/postgres`;
+      // Otherwise, attempt to use embedded-postgres if available locally
+      try {
+        const mod = await import('embedded-postgres');
+        const EmbeddedPostgres = mod.default || mod;
+        this.embedded = new EmbeddedPostgres({
+          port: this.port,
+          user: 'postgres',
+          password: 'password',
+          persistent: false,
+          dataDir: this.dataDir
+        });
+        await this.embedded.initialise();
+        await this.embedded.start();
+        connectionString = `postgresql://postgres:password@127.0.0.1:${this.port}/postgres`;
+      } catch (err) {
+        throw new Error(
+          `PostgreSQL is required for integration tests. Either set TEST_DATABASE_URL (e.g. in CI or Docker) or install embedded-postgres locally. Error: ${err.message}`
+        );
+      }
     }
 
     // 2. Connect pg pool with explicit maxPool size (tested at max=5!)
@@ -48,16 +56,8 @@ export class RealPostgresTestEnvironment {
       connectionTimeoutMillis: 5000,
     });
 
-    // 3. Run original migrations directly
-    const migrationsDir = path.join(__dirname, '../migrations');
-    const files = fs.readdirSync(migrationsDir).sort();
-
-    for (const file of files) {
-      if (file.endsWith('.sql')) {
-        const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-        await this.pool.query(sql);
-      }
-    }
+    // 3. Run original migrations using the advisory lock & schema_migrations journal
+    await runMigrations(this);
 
     return this;
   }

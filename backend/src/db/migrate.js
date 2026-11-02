@@ -14,6 +14,10 @@ export async function runMigrations(customDb = db) {
   
   const client = await customDb.getClient();
   try {
+    // Acquire PostgreSQL transactional advisory lock to prevent race conditions between runners
+    // Key hash for 'novarum_commerce_migrations'
+    await client.query('SELECT pg_advisory_lock(847291048)');
+
     // Migration tracking table
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -52,6 +56,9 @@ export async function runMigrations(customDb = db) {
       }
     }
   } finally {
+    try {
+      await client.query('SELECT pg_advisory_unlock(847291048)');
+    } catch (_) {}
     client.release();
   }
 }

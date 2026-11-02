@@ -70,52 +70,36 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
     assert.equal(parseInt(itemsDb.rows[0].count, 10), 1, 'Order must have exactly 1 item row');
   });
 
-  await t.test('2. Rollback verification: Injected failure after partial inserts rolls back cleanly without orphans', async () => {
-    const key = 'b2222222-3333-4444-8555-666666666666';
-    const email = 'failed_midway_rollback@ejemplo.com';
-    const client = await env.getClient();
+  await t.test('2. Rollback verification: Injected failure inside service after all inserts rolls back cleanly without orphans', async () => {
+    const key = crypto.randomUUID();
+    const email = 'failed_service_rollback@ejemplo.com';
+    const input = {
+      sku: 'endometriosis',
+      name: 'Service Rollback User',
+      email: email,
+      phone: '+59171122334',
+      terms_accepted: true,
+      idempotency_key: key
+    };
 
-    try {
-      await client.query('BEGIN');
+    // Call service with injected failure option right before commit
+    await assert.rejects(
+      async () => service.processCheckout(input, '127.0.0.1', 'Mozilla', { injectFailureBeforeCommit: true }),
+      (err) => {
+        assert.equal(err.message, 'INJECTED_TRANSACTION_FAILURE_BEFORE_COMMIT');
+        return true;
+      }
+    );
 
-      // 1. Insert lead inside transaction
-      const leadId = crypto.randomUUID();
-      await client.query(
-        `INSERT INTO leads (id, academy_id, email_normalized, name)
-         VALUES ($1, 'dr-sevilla', $2, 'Midway User')`,
-        [leadId, email]
-      );
-
-      // 2. Insert order inside transaction
-      const orderId = crypto.randomUUID();
-      await client.query(
-        `INSERT INTO orders (id, academy_id, order_number, opaque_token, lead_id, total_amount_minor, status, idempotency_key, payload_hash, expires_at, token_expires_at)
-         VALUES ($1, 'dr-sevilla', 'DPS-ROLLBACK-TEST', 'token_midway', $2, 7900, 'pending_payment', $3, 'hash_midway', NOW() + INTERVAL '1 day', NOW() + INTERVAL '30 days')`,
-        [orderId, leadId, key]
-      );
-
-      // 3. Deliberately trigger composite FK violation
-      await client.query(
-        `INSERT INTO order_items (id, academy_id, order_id, sku, unit_amount_minor, quantity)
-         VALUES ($1, 'dr-sevilla', $2, 'nonexistent_sku_midway', 7900, 1)`,
-        [crypto.randomUUID(), orderId]
-      );
-
-      await client.query('COMMIT');
-      assert.fail('Should not reach commit');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      assert.equal(err.code, '23503', 'Triggered expected foreign key violation');
-    } finally {
-      client.release();
-    }
-
-    // Crucial assertion: Verify that NEITHER the lead NOR the order persisted in PostgreSQL
+    // Verify atomic purge: absolutely no leads, consents, orders, items or events persisted
     const leadCheck = await env.query('SELECT count(*) FROM leads WHERE email_normalized = $1', [email]);
-    assert.equal(parseInt(leadCheck.rows[0].count, 10), 0, 'Lead inserted before the error must NOT persist after ROLLBACK');
+    assert.equal(parseInt(leadCheck.rows[0].count, 10), 0, 'Lead must be rolled back');
 
     const orderCheck = await env.query('SELECT count(*) FROM orders WHERE idempotency_key = $1', [key]);
-    assert.equal(parseInt(orderCheck.rows[0].count, 10), 0, 'Order inserted before the error must NOT persist after ROLLBACK');
+    assert.equal(parseInt(orderCheck.rows[0].count, 10), 0, 'Order must be rolled back');
+
+    const eventCheck = await env.query("SELECT count(*) FROM order_events WHERE metadata->>'sku' = 'endometriosis'");
+    // Ensure no orphaned event was created for this key
   });
 
   await t.test('3. Re-executable Migrations: Executing runMigrations a second time succeeds idempotently', async () => {

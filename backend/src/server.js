@@ -6,17 +6,24 @@ import { db } from './db/pool.js';
 import { CheckoutService } from './services/checkout.service.js';
 
 export async function buildApp(customDb = db, opts = {}) {
+  // Determine trusted proxies: false by default in local/dev; or explicit list of proxy IPs in production
+  const trustProxy = opts.trustProxy !== undefined 
+    ? opts.trustProxy 
+    : (config.nodeEnv === 'production' && process.env.TRUSTED_PROXIES ? process.env.TRUSTED_PROXIES.split(',') : false);
+
   const app = Fastify({
     logger: config.nodeEnv === 'development' ? {
       level: 'info',
       serializers: {
         req(req) {
           // Zero PII and token sanitization for incoming requests
-          // Never log raw token paths or query params
-          const sanitizedUrl = req.url.replace(/\/orders\/[a-f0-9]{32,128}\/status/i, '/orders/:token/status');
+          // Never log raw token paths, query strings, or sentinels
+          // Cleanly extract route template without query params
+          const pathOnly = (req.url || '').split('?')[0];
+          const sanitizedRoute = pathOnly.replace(/\/orders\/[^\/]+\/status/i, '/orders/:opaque_token/status');
           return {
             method: req.method,
-            url: sanitizedUrl,
+            route: sanitizedRoute,
             remoteAddress: req.ip,
           };
         },
@@ -27,13 +34,18 @@ export async function buildApp(customDb = db, opts = {}) {
         }
       }
     } : false,
-    trustProxy: opts.trustProxy !== undefined ? opts.trustProxy : true,
+    trustProxy,
   });
 
   // Abuse Protection & Rate Limiting (P1)
+  // Use client IP as resolved by Fastify (respecting trustProxy setting)
   await app.register(rateLimit, {
     max: opts.rateLimitMax || 30, // 30 requests per minute by default
     timeWindow: '1 minute',
+    keyGenerator: (req) => {
+      // If trustProxy is disabled, req.raw.socket.remoteAddress is strictly used
+      return req.ip || req.raw.socket.remoteAddress;
+    },
     errorResponseBuilder: (request, context) => ({
       error: 'TOO_MANY_REQUESTS',
       message: `Rate limit exceeded. Try again in ${Math.ceil(context.after / 1000)} seconds.`,
