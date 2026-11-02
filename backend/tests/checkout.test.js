@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createTestDatabase } from './setup-db.js';
 import { CheckoutService } from '../src/services/checkout.service.js';
 
-test('Checkout & Idempotency Suite (PostgreSQL Atomic Constraints)', async (t) => {
+test('Checkout & Idempotency Suite (Unit / pg-mem)', async (t) => {
   let testDb;
   let service;
 
@@ -113,14 +113,12 @@ test('Checkout & Idempotency Suite (PostgreSQL Atomic Constraints)', async (t) =
       service.processCheckout(input)
     ]);
 
-    // Exactly one created (201), the rest replayed (200)
     const createdCount = results.filter(r => r.statusCode === 201).length;
     const replayedCount = results.filter(r => r.statusCode === 200).length;
 
     assert.equal(createdCount, 1, 'Only one order should have been created (201)');
     assert.equal(replayedCount, 4, 'All concurrent calls should succeed idempotently (200)');
 
-    // Verify DB count
     const countRes = await testDb.query(
       "SELECT count(*) FROM orders WHERE academy_id = 'dr-sevilla' AND idempotency_key = $1",
       [key]
@@ -128,7 +126,56 @@ test('Checkout & Idempotency Suite (PostgreSQL Atomic Constraints)', async (t) =
     assert.equal(parseInt(countRes.rows[0].count, 10), 1, 'Database must have exactly 1 order row');
   });
 
-  await t.test('5. Data Minimization & Input Validation: Rejects invalid or open fields', async () => {
+  await t.test('5. Lead Identity Preservation: Anonymous checkout does NOT overwrite existing lead name', async () => {
+    // 1. Existing lead registered previously with verified name
+    await testDb.query(
+      `INSERT INTO leads (id, academy_id, email_normalized, name, phone)
+       VALUES ('11111111-2222-4333-8444-555555555555', 'dr-sevilla', 'daniela@ejemplo.com', 'Daniela Original', '+59170011223')`
+    );
+
+    // 2. Someone initiates checkout with same email but attempts to overwrite name
+    const input = {
+      sku: 'endometriosis',
+      name: 'Daniela Impostor',
+      email: 'daniela@ejemplo.com',
+      terms_accepted: true,
+      idempotency_key: 'e0000000-0000-4000-8000-000000000001'
+    };
+
+    const res = await service.processCheckout(input);
+    assert.equal(res.statusCode, 201);
+
+    // 3. Verify lead name was PRESERVED in database
+    const leadRes = await testDb.query(
+      "SELECT name, phone FROM leads WHERE academy_id = 'dr-sevilla' AND email_normalized = 'daniela@ejemplo.com'"
+    );
+    assert.equal(leadRes.rows[0].name, 'Daniela Original', 'Lead name must not be overwritten by subsequent checkouts');
+    assert.equal(leadRes.rows[0].phone, '+59170011223');
+  });
+
+  await t.test('6. UTM Strict Validation: Rejects invalid or dangerous characters', async () => {
+    const base = {
+      sku: 'endometriosis',
+      name: 'Valid Name',
+      email: 'valid@ejemplo.com',
+      terms_accepted: true,
+      idempotency_key: 'e0000000-0000-4000-8000-000000000002'
+    };
+
+    // Invalid UTM with special characters / XSS probe
+    await assert.rejects(
+      () => service.processCheckout({ ...base, utm: { source: 'tiktok<script>' } }),
+      (err) => err.statusCode === 422
+    );
+
+    // UTM exceeding 64 chars
+    await assert.rejects(
+      () => service.processCheckout({ ...base, utm: { campaign: 'a'.repeat(65) } }),
+      (err) => err.statusCode === 422
+    );
+  });
+
+  await t.test('7. Data Minimization & Input Validation: Rejects invalid or open fields', async () => {
     const base = {
       sku: 'endometriosis',
       name: 'Valid Name',
@@ -162,7 +209,7 @@ test('Checkout & Idempotency Suite (PostgreSQL Atomic Constraints)', async (t) =
     );
   });
 
-  await t.test('6. Zero PII Order Status retrieval', async () => {
+  await t.test('8. Zero PII Order Status retrieval and Lazy Expiration', async () => {
     const input = {
       sku: 'endometriosis',
       name: 'Sofia Reyes',

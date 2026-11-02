@@ -1,5 +1,6 @@
 -- 002_seed_dr_sevilla.sql
 -- Seed data for MVP tenant: dr-sevilla exclusively
+-- Idempotent & Re-executable
 
 -- 1. Insert Academy
 INSERT INTO academies (id, slug, legal_name, default_currency, status, billing_entity)
@@ -29,19 +30,23 @@ ON CONFLICT (academy_id, sku) DO UPDATE SET
     is_active = EXCLUDED.is_active;
 
 -- 3. Insert Prices (Server-side single source of truth)
--- Individual courses: Bs 79 (7900 minor units)
--- Complete pack (4 courses): Bs 199 (19900 minor units)
+-- Re-executable: check before insert using CTE / NOT EXISTS
 INSERT INTO prices (academy_id, sku, currency, amount_minor, is_current)
-VALUES ('dr-sevilla', 'endometriosis', 'BOB', 7900, TRUE);
+SELECT 'dr-sevilla', 'endometriosis', 'BOB', 7900, TRUE
+WHERE NOT EXISTS (SELECT 1 FROM prices WHERE academy_id = 'dr-sevilla' AND sku = 'endometriosis' AND is_current = TRUE);
 
 INSERT INTO prices (academy_id, sku, currency, amount_minor, is_current)
-VALUES ('dr-sevilla', 'vaginosis', 'BOB', 7900, TRUE);
+SELECT 'dr-sevilla', 'vaginosis', 'BOB', 7900, TRUE
+WHERE NOT EXISTS (SELECT 1 FROM prices WHERE academy_id = 'dr-sevilla' AND sku = 'vaginosis' AND is_current = TRUE);
 
 INSERT INTO prices (academy_id, sku, currency, amount_minor, is_current)
-VALUES ('dr-sevilla', 'sop', 'BOB', 7900, TRUE);
+SELECT 'dr-sevilla', 'sop', 'BOB', 7900, TRUE
+WHERE NOT EXISTS (SELECT 1 FROM prices WHERE academy_id = 'dr-sevilla' AND sku = 'sop' AND is_current = TRUE);
 
 INSERT INTO prices (academy_id, sku, currency, amount_minor, is_current)
-VALUES ('dr-sevilla', 'aprende-mujer', 'BOB', 7900, TRUE);
+SELECT 'dr-sevilla', 'aprende-mujer', 'BOB', 7900, TRUE
+WHERE NOT EXISTS (SELECT 1 FROM prices WHERE academy_id = 'dr-sevilla' AND sku = 'aprende-mujer' AND is_current = TRUE);
 
 INSERT INTO prices (academy_id, sku, currency, amount_minor, is_current)
-VALUES ('dr-sevilla', 'mujer-informada-4', 'BOB', 19900, TRUE);
+SELECT 'dr-sevilla', 'mujer-informada-4', 'BOB', 19900, TRUE
+WHERE NOT EXISTS (SELECT 1 FROM prices WHERE academy_id = 'dr-sevilla' AND sku = 'mujer-informada-4' AND is_current = TRUE);

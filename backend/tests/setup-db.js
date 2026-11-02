@@ -10,14 +10,6 @@ const __dirname = path.dirname(__filename);
 export async function createTestDatabase() {
   const pgMem = newDb();
 
-  // In real PostgreSQL, DEFAULT gen_random_uuid() is evaluated dynamically per row.
-  // pg-mem evaluates default expressions once at table definition time unless overridden.
-  // We intercept INSERT statements without explicit UUIDs and inject crypto.randomUUID().
-  pgMem.public.interceptQueries(sql => {
-    // Return null to let pg-mem handle normally
-    return null;
-  });
-
   const adapter = pgMem.adapters.createPg();
   const pool = new adapter.Pool();
 
@@ -25,7 +17,6 @@ export async function createTestDatabase() {
   
   // 1. Initial schema: convert DEFAULT gen_random_uuid() to DEFAULT for compatibility
   let schemaSql = fs.readFileSync(path.join(migrationsDir, '001_initial_schema.sql'), 'utf8');
-  // Strip DEFAULT gen_random_uuid() for pg-mem compatibility
   const sanitizedSchema = schemaSql.replace(/DEFAULT gen_random_uuid\(\)/g, '');
   await pool.query(sanitizedSchema);
 

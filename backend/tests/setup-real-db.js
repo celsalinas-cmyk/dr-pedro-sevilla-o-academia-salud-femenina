@@ -10,8 +10,9 @@ const __dirname = path.dirname(__filename);
 const { Pool } = pg;
 
 export class RealPostgresTestEnvironment {
-  constructor(port = 54329) {
+  constructor(port = 54329, maxPool = 25) {
     this.port = port;
+    this.maxPool = maxPool;
     this.externalDbUrl = process.env.TEST_DATABASE_URL || null;
     this.dataDir = path.join(__dirname, '../data/test-pg-' + port);
     this.embedded = null;
@@ -39,10 +40,10 @@ export class RealPostgresTestEnvironment {
       connectionString = `postgresql://postgres:password@127.0.0.1:${this.port}/postgres`;
     }
 
-    // 2. Connect pg pool
+    // 2. Connect pg pool with explicit maxPool size (tested at max=5!)
     this.pool = new Pool({
       connectionString,
-      max: 25, // generous pool for concurrency testing
+      max: this.maxPool,
       idleTimeoutMillis: 10000,
       connectionTimeoutMillis: 5000,
     });

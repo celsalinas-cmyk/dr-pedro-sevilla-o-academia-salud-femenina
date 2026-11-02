@@ -1,0 +1,60 @@
+name: Backend CI - Gate 2-A1
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+  push:
+    branches:
+      - feature/gate2-commerce-core
+
+jobs:
+  test-linux:
+    name: Node.js Test Suite on Linux (Real PostgreSQL)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: novarum_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Clean Install Dependencies
+        run: npm ci
+
+      - name: Run Unit Tests (In-Memory)
+        run: npm run test:unit
+
+      - name: Run Integration Tests (Real PostgreSQL Container)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/novarum_test_db
+        run: npm run test:integration
+
+      - name: Run All Tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/novarum_test_db
+        run: npm run test:all

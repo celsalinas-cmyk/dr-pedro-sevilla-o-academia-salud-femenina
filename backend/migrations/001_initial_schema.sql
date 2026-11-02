@@ -1,6 +1,7 @@
 -- 001_initial_schema.sql
 -- NOVARUM Commerce Engine - Gate 2-A1 Schema
 -- Multi-tenant B2C Architecture with strict composite academy_id isolation
+-- Transactional & Re-executable (Idempotent DDL)
 
 -- 1. ACADEMIES
 CREATE TABLE IF NOT EXISTS academies (
@@ -51,10 +52,6 @@ CREATE TABLE IF NOT EXISTS leads (
     email_normalized VARCHAR(255) NOT NULL,
     name VARCHAR(255) NOT NULL,
     phone VARCHAR(32),
-    utm_source VARCHAR(100),
-    utm_medium VARCHAR(100),
-    utm_campaign VARCHAR(100),
-    utm_content VARCHAR(100),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_leads_academy_email UNIQUE (academy_id, email_normalized),
@@ -87,8 +84,13 @@ CREATE TABLE IF NOT EXISTS orders (
     status VARCHAR(32) NOT NULL DEFAULT 'pending_payment',
     idempotency_key UUID NOT NULL,
     payload_hash VARCHAR(64) NOT NULL,
+    utm_source VARCHAR(64),
+    utm_medium VARCHAR(64),
+    utm_campaign VARCHAR(64),
+    utm_content VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,
+    token_expires_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT uq_orders_academy_idempotency UNIQUE (academy_id, idempotency_key),
     CONSTRAINT uq_orders_academy_number UNIQUE (academy_id, order_number),
     CONSTRAINT uq_orders_academy_order_id UNIQUE (academy_id, id),

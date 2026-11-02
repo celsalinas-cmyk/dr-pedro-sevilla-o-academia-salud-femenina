@@ -7,15 +7,19 @@ export class CheckoutService {
   }
 
   /**
-   * Generates a deterministic canonical hash of the checkout intent.
-   * Includes the complete set of relevant checkout data to detect payload conflicts.
+   * Deterministic canonical hash of the checkout intent.
+   * Explicit Policy:
+   * Included: sku, email_normalized, name, phone, terms_accepted, marketing_opt_in, privacy_version.
+   * Excluded: UTM parameters (traffic attribution is tracking metadata, not commercial intent;
+   * a customer re-entering the checkout from a different story/link with same idempotency key
+   * must not trigger 409 conflict).
    */
   calculatePayloadHash(data) {
     const canonicalString = [
       data.sku || '',
       (data.email || '').trim().toLowerCase(),
       (data.name || '').trim(),
-      (data.phone || '').trim(),
+      data.phone ? data.phone.trim() : '',
       data.terms_accepted ? 'true' : 'false',
       data.marketing_opt_in ? 'true' : 'false',
       data.privacy_version || 'v1.0'
@@ -25,10 +29,43 @@ export class CheckoutService {
   }
 
   /**
+   * Strict validation of UTM tracking parameters.
+   */
+  validateAndSanitizeUtm(rawUtm) {
+    if (!rawUtm || typeof rawUtm !== 'object' || Array.isArray(rawUtm)) {
+      return { source: null, medium: null, campaign: null, content: null };
+    }
+
+    const utmRegex = /^[a-zA-Z0-9_-]{1,64}$/;
+    const sanitizeField = (val, fieldName) => {
+      if (val === undefined || val === null || val === '') return null;
+      if (typeof val !== 'string') {
+        throw Object.assign(new Error(`UTM ${fieldName} must be a string.`), { statusCode: 422, code: 'VALIDATION_ERROR' });
+      }
+      const trimmed = val.trim();
+      if (!utmRegex.test(trimmed)) {
+        throw Object.assign(new Error(`UTM ${fieldName} contains invalid characters or exceeds 64 chars.`), { statusCode: 422, code: 'VALIDATION_ERROR' });
+      }
+      return trimmed;
+    };
+
+    return {
+      source: sanitizeField(rawUtm.source, 'source'),
+      medium: sanitizeField(rawUtm.medium, 'medium'),
+      campaign: sanitizeField(rawUtm.campaign, 'campaign'),
+      content: sanitizeField(rawUtm.content, 'content'),
+    };
+  }
+
+  /**
    * Validates input fields rigorously (Data Minimization & Schema Check).
    */
   validateCheckoutInput(input) {
     const errors = [];
+
+    if (!input || typeof input !== 'object') {
+      return ['Request payload must be a JSON object.'];
+    }
 
     if (!input.sku || typeof input.sku !== 'string') {
       errors.push('SKU is required and must be a string.');
@@ -44,7 +81,7 @@ export class CheckoutService {
     }
 
     if (!input.email || typeof input.email !== 'string') {
-      errors.push('Email is required.');
+      errors.push('Email is required and must be a string.');
     } else {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(input.email.trim()) || input.email.trim().length > 100) {
@@ -52,19 +89,31 @@ export class CheckoutService {
       }
     }
 
-    if (input.phone) {
-      const phoneRegex = /^\+?[0-9]{7,15}$/;
-      if (!phoneRegex.test(input.phone.trim())) {
-        errors.push('Phone must be a valid numeric international string (7-15 digits).');
+    if (input.phone !== undefined && input.phone !== null && input.phone !== '') {
+      if (typeof input.phone !== 'string') {
+        errors.push('Phone must be a string.');
+      } else {
+        const phoneRegex = /^\+?[0-9]{7,15}$/;
+        if (!phoneRegex.test(input.phone.trim())) {
+          errors.push('Phone must be a valid numeric international string (7-15 digits).');
+        }
       }
     }
 
     if (input.terms_accepted !== true) {
-      errors.push('Terms of service and privacy policy must be explicitly accepted.');
+      errors.push('Terms of service and privacy policy must be explicitly accepted (boolean true).');
+    }
+
+    if (input.marketing_opt_in !== undefined && typeof input.marketing_opt_in !== 'boolean') {
+      errors.push('marketing_opt_in must be a boolean.');
+    }
+
+    if (input.privacy_version !== undefined && (typeof input.privacy_version !== 'string' || input.privacy_version.length > 32)) {
+      errors.push('privacy_version must be a string under 32 characters.');
     }
 
     if (!input.idempotency_key || typeof input.idempotency_key !== 'string') {
-      errors.push('idempotency_key (UUID) is required.');
+      errors.push('idempotency_key (UUID v4) is required.');
     } else {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(input.idempotency_key)) {
@@ -76,7 +125,7 @@ export class CheckoutService {
   }
 
   /**
-   * Atomic transactional checkout with strict idempotency and concurrency control.
+   * Atomic transactional checkout with strict idempotency, connection safety, and lead preservation.
    */
   async processCheckout(input, clientIp = '127.0.0.1', userAgent = '') {
     const validationErrors = this.validateCheckoutInput(input);
@@ -87,11 +136,12 @@ export class CheckoutService {
       throw err;
     }
 
+    const sanitizedUtm = this.validateAndSanitizeUtm(input.utm);
     const academyId = this.defaultAcademyId;
     const incomingPayloadHash = this.calculatePayloadHash(input);
     const emailNormalized = input.email.trim().toLowerCase();
     const nameTrimmed = input.name.trim();
-    const phoneTrimmed = input.phone ? input.phone.trim() : null;
+    const phoneTrimmed = input.phone && typeof input.phone === 'string' ? input.phone.trim() : null;
 
     const client = await this.db.getClient();
 
@@ -99,7 +149,6 @@ export class CheckoutService {
       await client.query('BEGIN');
 
       // 1. Check if an order already exists for this (academy_id, idempotency_key)
-      // Using FOR UPDATE on existing row or inserting with atomic conflict handling
       const existingOrderRes = await client.query(
         `SELECT id, order_number, opaque_token, total_amount_minor, currency, status, payload_hash, expires_at 
          FROM orders 
@@ -111,8 +160,6 @@ export class CheckoutService {
       if (existingOrderRes.rows.length > 0) {
         const existingOrder = existingOrderRes.rows[0];
         
-        // Idempotency check:
-        // Case A: Identical payload hash -> Return existing order (200 OK)
         if (existingOrder.payload_hash === incomingPayloadHash) {
           await client.query('COMMIT');
           return {
@@ -129,7 +176,6 @@ export class CheckoutService {
           };
         }
 
-        // Case B: Same idempotency key, different payload -> Reject with 409 Conflict
         await client.query('ROLLBACK');
         const conflictErr = new Error('The idempotency key was previously used with different checkout data.');
         conflictErr.statusCode = 409;
@@ -156,33 +202,30 @@ export class CheckoutService {
 
       const { amount_minor, currency } = priceRes.rows[0];
 
-      // 3. Upsert Lead (scoped unique per academy_id, email_normalized)
+      // 3. Lead Identity Preservation:
+      // Insert if not exists. If lead exists, DO NOT overwrite existing name or phone from anonymous checkout!
+      // Only fill phone if existing phone was NULL.
       const leadId = crypto.randomUUID();
       const leadRes = await client.query(
-        `INSERT INTO leads (id, academy_id, email_normalized, name, phone, utm_source, utm_medium, utm_campaign, utm_content)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO leads (id, academy_id, email_normalized, name, phone)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (academy_id, email_normalized) 
          DO UPDATE SET 
-            name = EXCLUDED.name,
-            phone = COALESCE(EXCLUDED.phone, leads.phone),
+            phone = COALESCE(leads.phone, EXCLUDED.phone),
             updated_at = NOW()
-         RETURNING id`,
+         RETURNING id, name, phone`,
         [
           leadId,
           academyId,
           emailNormalized,
           nameTrimmed,
-          phoneTrimmed,
-          input.utm?.source || null,
-          input.utm?.medium || null,
-          input.utm?.campaign || null,
-          input.utm?.content || null
+          phoneTrimmed
         ]
       );
 
       const actualLeadId = leadRes.rows[0].id;
 
-      // 4. Record Consent (without fixed salt IP hash, preserving privacy)
+      // 4. Record Consent
       const consentId = crypto.randomUUID();
       await client.query(
         `INSERT INTO consents (id, academy_id, lead_id, privacy_version, terms_accepted, marketing_opt_in, user_agent)
@@ -198,22 +241,28 @@ export class CheckoutService {
         ]
       );
 
-      // 5. Generate secure, collision-free identifiers via PostgreSQL sequence
+      // 5. Generate collision-free monotonic order number via sequence
       const orderId = crypto.randomUUID();
       const seqRes = await client.query("SELECT nextval('order_number_seq') AS seq");
       const seqVal = seqRes.rows[0].seq;
       const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       const orderNumber = `DPS-${datePart}-${seqVal}`;
       const opaqueToken = crypto.randomBytes(32).toString('hex');
-      const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours TTL
+      
+      // Separated TTLs:
+      // Order expires in 72 hours for payment; status inquiry token valid for 30 days
+      const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); 
+      const tokenExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
       // 6. Insert Order
       const orderRes = await client.query(
         `INSERT INTO orders (
             id, academy_id, order_number, opaque_token, lead_id, currency, 
-            total_amount_minor, status, idempotency_key, payload_hash, expires_at
+            total_amount_minor, status, idempotency_key, payload_hash, 
+            utm_source, utm_medium, utm_campaign, utm_content,
+            expires_at, token_expires_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_payment', $8, $9, $10)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_payment', $8, $9, $10, $11, $12, $13, $14, $15)
          RETURNING id, order_number, opaque_token, total_amount_minor, currency, status, expires_at`,
         [
           orderId,
@@ -225,13 +274,18 @@ export class CheckoutService {
           amount_minor,
           input.idempotency_key,
           incomingPayloadHash,
-          expiresAt
+          sanitizedUtm.source,
+          sanitizedUtm.medium,
+          sanitizedUtm.campaign,
+          sanitizedUtm.content,
+          expiresAt,
+          tokenExpiresAt
         ]
       );
 
       const newOrder = orderRes.rows[0];
 
-      // 7. Insert Order Item
+      // 7. Insert Order Item (composite FK to products and orders)
       const orderItemId = crypto.randomUUID();
       await client.query(
         `INSERT INTO order_items (id, academy_id, order_id, sku, unit_amount_minor, quantity)
@@ -239,7 +293,7 @@ export class CheckoutService {
         [orderItemId, academyId, newOrder.id, input.sku, amount_minor]
       );
 
-      // 8. Record Audit Event
+      // 8. Record Audit Event (safe metadata without sensitive objects)
       const orderEventId = crypto.randomUUID();
       await client.query(
         `INSERT INTO order_events (id, academy_id, order_id, previous_status, new_status, reason, metadata)
@@ -248,7 +302,12 @@ export class CheckoutService {
           orderEventId,
           academyId, 
           newOrder.id, 
-          JSON.stringify({ sku: input.sku, amount_minor, utm: input.utm || {} })
+          JSON.stringify({ 
+            sku: input.sku, 
+            amount_minor, 
+            utm_source: sanitizedUtm.source,
+            utm_campaign: sanitizedUtm.campaign
+          })
         ]
       );
 
@@ -268,14 +327,16 @@ export class CheckoutService {
       };
 
     } catch (err) {
-      await client.query('ROLLBACK');
+      // Always rollback active transaction on error
+      try {
+        await client.query('ROLLBACK');
+      } catch (_) {}
       
-      // PostgreSQL Unique Violation (23505) error handling for race conditions
+      // PostgreSQL Unique Violation (23505) error handling for concurrent race conditions
       if (err.code === '23505' || err.code === 23505 || (err.data && err.data.code === '23505')) {
-        // Race condition: another concurrent process committed the order milliseconds ago
-        // Check if constraint was idempotency key
+        // Reuse SAME connection without acquiring another connection from the pool!
         if (!err.constraint || err.constraint === 'uq_orders_academy_idempotency') {
-          const existingRes = await this.db.query(
+          const existingRes = await client.query(
             `SELECT order_number, opaque_token, total_amount_minor, currency, status, payload_hash, expires_at 
              FROM orders 
              WHERE academy_id = $1 AND idempotency_key = $2`,
@@ -306,7 +367,6 @@ export class CheckoutService {
           }
         }
 
-        // If order_number conflict occurred, reject cleanly
         if (err.constraint === 'uq_orders_academy_number') {
           const conflictErr = new Error('Order number conflict occurred. Please retry.');
           conflictErr.statusCode = 409;
@@ -317,17 +377,27 @@ export class CheckoutService {
 
       throw err;
     } finally {
+      // Guarantee release of client back to pool
       client.release();
     }
   }
 
   /**
    * Retrieves order status by opaque token (Zero PII).
+   * Checks token validity and marks order as expired if overdue.
    */
   async getOrderStatus(opaqueToken) {
+    if (!opaqueToken || typeof opaqueToken !== 'string' || opaqueToken.length !== 64) {
+      const err = new Error('Order not found.');
+      err.statusCode = 404;
+      err.code = 'ORDER_NOT_FOUND';
+      throw err;
+    }
+
     const academyId = this.defaultAcademyId;
     const res = await this.db.query(
-      `SELECT o.order_number, o.status, o.total_amount_minor, o.currency, o.created_at, o.expires_at, oi.sku
+      `SELECT o.id, o.order_number, o.status, o.total_amount_minor, o.currency, 
+              o.created_at, o.expires_at, o.token_expires_at, oi.sku
        FROM orders o
        JOIN order_items oi ON oi.order_id = o.id AND oi.academy_id = o.academy_id
        WHERE o.academy_id = $1 AND o.opaque_token = $2`,
@@ -341,6 +411,39 @@ export class CheckoutService {
       throw err;
     }
 
-    return res.rows[0];
+    const order = res.rows[0];
+    const now = new Date();
+
+    // Check token expiration
+    if (new Date(order.token_expires_at) < now) {
+      const err = new Error('Status token has expired.');
+      err.statusCode = 410;
+      err.code = 'TOKEN_EXPIRED';
+      throw err;
+    }
+
+    // Lazy expiration of unpaid orders past expires_at
+    if (order.status === 'pending_payment' && new Date(order.expires_at) < now) {
+      await this.db.query(
+        `UPDATE orders SET status = 'expired' WHERE id = $1 AND academy_id = $2`,
+        [order.id, academyId]
+      );
+      await this.db.query(
+        `INSERT INTO order_events (id, academy_id, order_id, previous_status, new_status, reason)
+         VALUES ($1, $2, $3, 'pending_payment', 'expired', 'Order payment window elapsed (72h)')`,
+        [crypto.randomUUID(), academyId, order.id]
+      );
+      order.status = 'expired';
+    }
+
+    return {
+      order_number: order.order_number,
+      status: order.status,
+      sku: order.sku,
+      total_amount_minor: order.total_amount_minor,
+      currency: order.currency,
+      created_at: order.created_at,
+      expires_at: order.expires_at
+    };
   }
 }

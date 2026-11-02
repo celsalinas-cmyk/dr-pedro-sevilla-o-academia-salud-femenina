@@ -1,10 +1,12 @@
 # Dependencies
 node_modules/
-package-lock.json
 
 # Environment files
 .env
 .env.local
+
+# Test data
+data/
 
 # Logs
 logs/
