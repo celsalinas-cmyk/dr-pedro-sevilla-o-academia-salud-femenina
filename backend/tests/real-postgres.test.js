@@ -18,7 +18,7 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
 
     // Ensure pristine test isolation: purge any residual transactional data
     await env.query(`
-      TRUNCATE TABLE order_events, order_items, orders, consent_records, leads CASCADE;
+      TRUNCATE TABLE order_events, order_items, orders, consents, leads CASCADE;
     `);
 
     service = new CheckoutService(env, 'dr-sevilla');
