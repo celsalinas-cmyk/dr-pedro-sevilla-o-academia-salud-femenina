@@ -388,8 +388,10 @@
     }
     if (confirmedStatusBadge) {
       const statusMap = {
-        'pending_payment': 'Pendiente de Pago',
-        'confirmed': 'Confirmado',
+        'pending_payment': 'Pendiente de Pago (Asistido)',
+        'paid_verified': 'Pago Verificado en Banco',
+        'enrollment_pending': 'Matrícula en Trámite',
+        'fulfilled': 'Matriculado',
         'expired': 'Expirado',
       };
       confirmedStatusBadge.textContent = statusMap[orderData.status] || orderData.status;
@@ -403,13 +405,14 @@
       }
     }
 
-    // Configure WhatsApp Direct Payment Link
+    // Configure Operator Protocol notice for Staging (no real QR/charges in staging)
     if (btnWhatsappPayment) {
-      const waNumber = '59178456338';
-      const waMsg = encodeURIComponent(
-        `Hola Dr. Pedro Sevilla / Academia Mujer Sana. Acabo de registrar mi pedido #${orderData.order_number} para el ${prod.title}. Deseo coordinar el pago de Bs ${(orderData.total_amount_minor / 100).toFixed(0)} por QR / Transferencia Simple.`
-      );
-      btnWhatsappPayment.href = `https://wa.me/${waNumber}?text=${waMsg}`;
+      btnWhatsappPayment.onclick = (e) => {
+        e.preventDefault();
+        alert(
+          `[Protocolo Operador Humano — Modo Staging]\n\nPedido registrado: #${orderData.order_number}\nCurso: ${prod.title}\nImporte: Bs ${(orderData.total_amount_minor / 100).toFixed(0)} BOB\n\nEn producción, un operador académico recibe la solicitud y envía manualmente el QR bancario oficial. El acceso a Moodle se habilita únicamente cuando el operador verifica efectivamente el abono en el banco.`
+        );
+      };
     }
   }
 
@@ -437,8 +440,10 @@
 
       statusLookupFeedback.className = 'status-lookup-feedback status-success';
       const statusNames = {
-        'pending_payment': 'Pendiente de Pago (Esperando comprobante)',
-        'confirmed': 'Confirmado (Acceso Habilitado)',
+        'pending_payment': 'Pendiente de Pago (Esperando emisión de QR por operador)',
+        'paid_verified': 'Pago Verificado en Banco',
+        'enrollment_pending': 'Matrícula en Trámite (Moodle)',
+        'fulfilled': 'Matriculado / Acceso Habilitado',
         'expired': 'Expirado',
       };
       statusLookupFeedback.innerHTML = `<strong>Estado Verificado:</strong> ${statusNames[data.status] || data.status}`;

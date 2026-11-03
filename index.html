@@ -134,9 +134,9 @@
                         <div class="bundle-action-wrapper">
                             <button type="button" class="btn btn-primary btn-bundle btn-open-checkout" data-action="open-checkout" data-sku="mujer-informada-4" aria-haspopup="dialog" aria-controls="checkout-modal">
                                 <span>Comprar los 4 cursos — Bs 199</span>
-                                <span class="cta-sub">Inscripción en Línea · Acceso Integral</span>
+                                <span class="cta-sub">Registro de Pedido · Coordinación Asistida</span>
                             </button>
-                            <span class="staging-notice-micro">🔒 Compra segura en bolivianos (BOB) · Garantía educativa</span>
+                            <span class="staging-notice-micro">🔒 Pedido registrado · Pago QR bancario asistido por operador</span>
                         </div>
                     </div>
                 </div>
@@ -795,21 +795,25 @@
                         </div>
                     </div>
 
-                    <!-- Pasos siguientes para pago en Bolivia -->
+                    <!-- Pasos siguientes para pago asistido por operador (Bolivia) -->
                     <div class="confirmation-next-steps">
-                        <h4>Pasos para completar tu acceso:</h4>
+                        <h4>Flujo de Pago QR y Matrícula Asistida por Operador:</h4>
                         <ol class="next-steps-list">
-                            <li>Envía tu <strong>Número de Pedido</strong> por WhatsApp al equipo de admisiones.</li>
-                            <li>Realiza tu pago mediante <strong>QR Simple</strong> o transferencia bancaria en moneda nacional (BOB).</li>
-                            <li>Una vez validado el comprobante, recibirás tus credenciales de estudio en el campus virtual.</li>
+                            <li>Tu pedido ha sido registrado en estado <strong>Pendiente de Pago</strong>.</li>
+                            <li>Un operador académico recibirá tu solicitud y te enviará manualmente el <strong>QR bancario oficial</strong> (BOB).</li>
+                            <li>Una vez realizado el pago, el operador <strong>verificará efectivamente el abono en la cuenta bancaria</strong> (el comprobante de pago por sí solo no constituye pago verificado).</li>
+                            <li>Solo tras la verificación bancaria efectiva se registrará el pago y se procederá con la matrícula en el campus Moodle.</li>
                         </ol>
+                        <div class="staging-flow-note">
+                            ℹ️ <em>Entorno de pruebas (Staging): No se emiten QR reales ni se procesan cobros en esta fase.</em>
+                        </div>
                     </div>
 
                     <!-- Botones de Acción -->
                     <div class="confirmation-actions">
-                        <a id="btn-whatsapp-payment" href="#" target="_blank" class="btn btn-whatsapp btn-full-width">
-                            <span>📲 Coordinar Pago por WhatsApp</span>
-                        </a>
+                        <button type="button" id="btn-whatsapp-payment" class="btn btn-secondary btn-full-width">
+                            <span>👨‍💼 Ver Protocolo de Operador (Staging)</span>
+                        </button>
                         <button type="button" id="btn-check-order-status" class="btn btn-secondary btn-full-width">
                             🔄 Verificar Estado del Pedido
                         </button>

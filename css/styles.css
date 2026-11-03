@@ -2554,6 +2554,16 @@ select.form-control {
     margin-bottom: 6px;
 }
 
+.staging-flow-note {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: #FEF3C7;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    color: #92400E;
+    text-align: center;
+}
+
 .confirmation-actions {
     display: flex;
     flex-direction: column;
