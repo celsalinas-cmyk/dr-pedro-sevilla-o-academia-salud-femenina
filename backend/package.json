@@ -6,10 +6,10 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test tests/checkout.test.js tests/isolation.test.js",
-    "test:unit": "node --test tests/checkout.test.js tests/isolation.test.js",
+    "test": "node --test tests/checkout.test.js tests/isolation.test.js tests/server-logs.test.js",
+    "test:unit": "node --test tests/checkout.test.js tests/isolation.test.js tests/server-logs.test.js",
     "test:integration": "node --test tests/real-postgres.test.js",
-    "test:all": "node --test tests/checkout.test.js tests/isolation.test.js tests/real-postgres.test.js",
+    "test:all": "node --test tests/checkout.test.js tests/isolation.test.js tests/server-logs.test.js tests/real-postgres.test.js",
     "migrate": "node src/db/migrate.js"
   },
   "dependencies": {
@@ -22,6 +22,9 @@
   },
   "devDependencies": {
     "pg-mem": "^3.0.4"
+  },
+  "overrides": {
+    "cookie": "^0.7.2"
   },
   "engines": {
     "node": ">=20.0.0"

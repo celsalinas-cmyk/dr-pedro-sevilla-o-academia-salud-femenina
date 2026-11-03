@@ -246,4 +246,80 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
 
     await brokenApp.close();
   });
+
+  await t.test('7. Incremental Migration from Legacy Schema: Preserves existing orders, backfills token_expires_at, and is idempotent', async () => {
+    // 1. Simulate legacy DB state prior to version 003:
+    // Remove migration 003 from journal and drop the new columns temporarily
+    await env.query('DELETE FROM schema_migrations WHERE version = $1', ['003_orders_token_expiration_and_utm.sql']);
+    await env.query(`
+      ALTER TABLE orders 
+        DROP COLUMN IF EXISTS token_expires_at,
+        DROP COLUMN IF EXISTS utm_source,
+        DROP COLUMN IF EXISTS utm_medium,
+        DROP COLUMN IF EXISTS utm_campaign,
+        DROP COLUMN IF EXISTS utm_content;
+    `);
+
+    // Create a lead for the legacy order
+    const leadRes = await env.query(`
+      INSERT INTO leads (academy_id, email_normalized, name)
+      VALUES ('dr-sevilla', $1, 'Legacy Pre-Migration Lead')
+      RETURNING id;
+    `, [`legacy_lead_${Date.now()}@ejemplo.com`]);
+    const legacyLeadId = leadRes.rows[0].id;
+
+    // 2. Insert pre-existing order under legacy schema (NO token_expires_at or utm_* columns)
+    const legacyOrderNumber = `DPS-LEGACY-${Date.now()}`;
+    const legacyToken = `legacy_tok_${crypto.randomUUID().slice(0, 8)}`;
+    const legacyKey = crypto.randomUUID();
+    await env.query(`
+      INSERT INTO orders (
+        academy_id, order_number, opaque_token, lead_id, total_amount_minor, 
+        status, idempotency_key, payload_hash, expires_at
+      ) VALUES (
+        'dr-sevilla', $1, $2, $3, 19900,
+        'pending_payment', $4, 'legacy_hash_val', NOW() + INTERVAL '3 days'
+      );
+    `, [legacyOrderNumber, legacyToken, legacyLeadId, legacyKey]);
+
+    // 3. Execute runMigrations: acquires advisory lock, applies 003 incrementally and updates schema_migrations
+    await runMigrations(env);
+
+    // 4. Assertions:
+    // a) Existing legacy order remains intact
+    const orderRes = await env.query(
+      'SELECT order_number, status, total_amount_minor, expires_at, token_expires_at, utm_source FROM orders WHERE order_number = $1',
+      [legacyOrderNumber]
+    );
+    assert.equal(orderRes.rows.length, 1, 'Pre-existing order must be preserved after incremental migration');
+    const legacyRow = orderRes.rows[0];
+    assert.equal(legacyRow.order_number, legacyOrderNumber);
+    assert.equal(legacyRow.total_amount_minor, 19900);
+    assert.equal(legacyRow.status, 'pending_payment');
+
+    // b) token_expires_at was backfilled and is NOT NULL
+    assert.ok(legacyRow.token_expires_at !== null, 'token_expires_at must be backfilled and NOT NULL');
+    assert.ok(
+      new Date(legacyRow.token_expires_at) > new Date(legacyRow.expires_at), 
+      'Backfilled token_expires_at must be valid and after expires_at (+30 days)'
+    );
+
+    // c) UTM columns exist and are accessible
+    assert.equal(legacyRow.utm_source, null, 'UTM column exists on orders and is accessible');
+
+    // d) Journal records migration 003
+    const journalCheck = await env.query(
+      'SELECT 1 FROM schema_migrations WHERE version = $1',
+      ['003_orders_token_expiration_and_utm.sql']
+    );
+    assert.equal(journalCheck.rows.length, 1, '003_orders_token_expiration_and_utm.sql must be recorded in schema_migrations');
+
+    // 5. Re-run runMigrations a second time: no-op, no errors, fully idempotent
+    await runMigrations(env);
+    const secondCheck = await env.query(
+      'SELECT count(*) FROM orders WHERE order_number = $1',
+      [legacyOrderNumber]
+    );
+    assert.equal(parseInt(secondCheck.rows[0].count, 10), 1, 'Second migration run must preserve existing orders without errors');
+  });
 });

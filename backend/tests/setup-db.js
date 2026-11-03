@@ -20,6 +20,10 @@ export async function createTestDatabase() {
   const sanitizedSchema = schemaSql.replace(/DEFAULT gen_random_uuid\(\)/g, '');
   await pool.query(sanitizedSchema);
 
+  // Apply incremental migration 003 for token_expires_at and UTM columns
+  const migration003 = fs.readFileSync(path.join(migrationsDir, '003_orders_token_expiration_and_utm.sql'), 'utf8');
+  await pool.query(migration003);
+
   // Register nextval function in pg-mem
   let seqCounter = 1000;
   pgMem.public.registerFunction({
