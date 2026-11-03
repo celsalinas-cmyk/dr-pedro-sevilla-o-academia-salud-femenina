@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - 'backend/**'
+      - 'index.html'
+      - 'js/**'
+      - 'css/**'
+      - '.github/workflows/**'
   push:
     branches:
       - feature/gate2-commerce-core
