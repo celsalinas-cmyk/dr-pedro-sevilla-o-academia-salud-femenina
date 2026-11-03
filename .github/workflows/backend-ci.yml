@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - feature/gate2-commerce-core
+      - feature/gate2-a2-checkout-ui
 
 jobs:
   test-linux:

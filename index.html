@@ -132,11 +132,11 @@
                             <span class="price-note">*Precio referencial de validación para Staging</span>
                         </div>
                         <div class="bundle-action-wrapper">
-                            <button type="button" class="btn btn-primary btn-bundle btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible tras validación de pasarela de pago.">
+                            <button type="button" class="btn btn-primary btn-bundle btn-open-checkout" data-action="open-checkout" data-sku="mujer-informada-4" aria-haspopup="dialog" aria-controls="checkout-modal">
                                 <span>Comprar los 4 cursos — Bs 199</span>
-                                <span class="cta-sub">Staging · Próximamente</span>
+                                <span class="cta-sub">Inscripción en Línea · Acceso Integral</span>
                             </button>
-                            <span class="staging-notice-micro">⚠️ Botón inactivo durante fase de homologación Staging</span>
+                            <span class="staging-notice-micro">🔒 Compra segura en bolivianos (BOB) · Garantía educativa</span>
                         </div>
                     </div>
                 </div>
@@ -224,8 +224,8 @@
                             <span class="amount-single">Bs 79</span>
                             <span class="price-single-note">Staging</span>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible.">
-                            Comprar curso — Bs 79 <span class="badge-tag-mini">Próximamente</span>
+                        <button type="button" class="btn btn-secondary btn-open-checkout" data-action="open-checkout" data-sku="endometriosis" aria-haspopup="dialog" aria-controls="checkout-modal">
+                            Comprar curso — Bs 79
                         </button>
                     </div>
                 </article>
@@ -248,8 +248,8 @@
                             <span class="amount-single">Bs 79</span>
                             <span class="price-single-note">Staging</span>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible.">
-                            Comprar curso — Bs 79 <span class="badge-tag-mini">Próximamente</span>
+                        <button type="button" class="btn btn-secondary btn-open-checkout" data-action="open-checkout" data-sku="vaginosis" aria-haspopup="dialog" aria-controls="checkout-modal">
+                            Comprar curso — Bs 79
                         </button>
                     </div>
                 </article>
@@ -272,8 +272,8 @@
                             <span class="amount-single">Bs 79</span>
                             <span class="price-single-note">Staging</span>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible.">
-                            Comprar curso — Bs 79 <span class="badge-tag-mini">Próximamente</span>
+                        <button type="button" class="btn btn-secondary btn-open-checkout" data-action="open-checkout" data-sku="sop" aria-haspopup="dialog" aria-controls="checkout-modal">
+                            Comprar curso — Bs 79
                         </button>
                     </div>
                 </article>
@@ -296,8 +296,8 @@
                             <span class="amount-single">Bs 79</span>
                             <span class="price-single-note">Staging</span>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible.">
-                            Comprar curso — Bs 79 <span class="badge-tag-mini">Próximamente</span>
+                        <button type="button" class="btn btn-secondary btn-open-checkout" data-action="open-checkout" data-sku="aprende-mujer" aria-haspopup="dialog" aria-controls="checkout-modal">
+                            Comprar curso — Bs 79
                         </button>
                     </div>
                 </article>
@@ -638,6 +638,196 @@
             }
         });
     </script>
+
+    <!-- Modal Unificado de Compra (Gate 2-A2) -->
+    <div id="checkout-modal-backdrop" class="checkout-backdrop" hidden>
+        <div id="checkout-modal" class="checkout-modal" role="dialog" aria-modal="true" aria-labelledby="checkout-modal-title" tabindex="-1">
+            <!-- Botón cerrar -->
+            <button type="button" class="checkout-modal-close" id="btn-close-checkout" aria-label="Cerrar ventana de compra">
+                &times;
+            </button>
+
+            <!-- Cabecera -->
+            <div class="checkout-header">
+                <span class="checkout-badge-academy">Academia Mujer Sana</span>
+                <h3 id="checkout-modal-title" class="checkout-title">Finalizar Inscripción</h3>
+                <p class="checkout-subtitle">Completa tus datos para registrar tu pedido de forma segura.</p>
+            </div>
+
+            <!-- Estado 1: Formulario de Compra -->
+            <div id="checkout-form-container">
+                <!-- Resumen del Producto Seleccionado -->
+                <div class="checkout-product-summary" id="checkout-product-summary">
+                    <div class="product-summary-info">
+                        <span class="product-summary-badge" id="checkout-product-tag">Pack Integral · 4 Cursos</span>
+                        <h4 class="product-summary-title" id="checkout-product-title">Pack Completo: Mujer Informada</h4>
+                        <span class="product-summary-sku" id="checkout-product-sku">SKU: mujer-informada-4</span>
+                    </div>
+                    <div class="product-summary-pricing">
+                        <span class="product-summary-amount" id="checkout-product-price">Bs 199</span>
+                        <span class="product-summary-currency">BOB</span>
+                    </div>
+                </div>
+
+                <!-- Selector rápido para cambiar entre los 5 cursos/pack -->
+                <div class="checkout-sku-switcher">
+                    <label for="checkout-sku-select" class="checkout-label-micro">Cambiar curso o paquete:</label>
+                    <select id="checkout-sku-select" class="checkout-select">
+                        <option value="mujer-informada-4">Pack Completo: Mujer Informada (4 Cursos) — Bs 199</option>
+                        <option value="endometriosis">Curso: Endometriosis (Del Dolor a la Comprensión) — Bs 79</option>
+                        <option value="vaginosis">Curso: Vaginosis Bacteriana (Reconocimiento y Cuidados) — Bs 79</option>
+                        <option value="sop">Curso: Síndrome de Ovario Poliquístico (SOP) — Bs 79</option>
+                        <option value="aprende-mujer">Curso: Aprende Mujer (Microbiota y pH) — Bs 79</option>
+                    </select>
+                </div>
+
+                <!-- Contenedor de Alerta / Error -->
+                <div id="checkout-error-alert" class="checkout-alert" role="alert" hidden>
+                    <div class="alert-icon">⚠️</div>
+                    <div class="alert-content">
+                        <strong id="alert-title">Error en el pedido</strong>
+                        <p id="alert-message">Mensaje de error</p>
+                    </div>
+                    <button type="button" id="btn-retry-checkout" class="btn-retry" hidden>Reintentar</button>
+                </div>
+
+                <!-- Formulario -->
+                <form id="checkout-form" novalidate>
+                    <div class="form-group">
+                        <label for="checkout-name" class="form-label">
+                            Nombre Completo <span class="required">*</span>
+                        </label>
+                        <input type="text" id="checkout-name" name="name" class="form-input" 
+                               placeholder="Ej. Valeria Mendoza" required minlength="2" maxlength="80" 
+                               autocomplete="name">
+                        <span class="form-helper" id="name-helper">Como deseas que figure en tu constancia de estudio.</span>
+                        <span class="form-error" id="name-error" hidden>Por favor ingresa un nombre válido (2-80 caracteres).</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="checkout-email" class="form-label">
+                            Correo Electrónico <span class="required">*</span>
+                        </label>
+                        <input type="email" id="checkout-email" name="email" class="form-input" 
+                               placeholder="valeria@ejemplo.com" required maxlength="100" 
+                               autocomplete="email">
+                        <span class="form-helper" id="email-helper">Aquí recibirás los datos de tu pedido y confirmación.</span>
+                        <span class="form-error" id="email-error" hidden>Ingresa un correo electrónico válido.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="checkout-phone" class="form-label">
+                            WhatsApp / Celular <span class="optional">(Opcional)</span>
+                        </label>
+                        <input type="tel" id="checkout-phone" name="phone" class="form-input" 
+                               placeholder="+591 70000000" maxlength="20" autocomplete="tel">
+                        <span class="form-helper">Facilita la coordinación de pagos en Bolivia (QR / Simple).</span>
+                        <span class="form-error" id="phone-error" hidden>El teléfono debe tener entre 7 y 15 dígitos numéricos.</span>
+                    </div>
+
+                    <!-- Consentimientos Separados -->
+                    <div class="consents-container">
+                        <label class="consent-checkbox-label">
+                            <input type="checkbox" id="consent-terms" name="terms_accepted" required class="consent-checkbox">
+                            <span class="consent-text">
+                                <strong>Acepto los Términos del Servicio y la Política de Privacidad (v1.0).</strong>
+                                Entiendo que el contenido es 100% educativo y no reemplaza la consulta médica individualizada. <span class="required">*</span>
+                            </span>
+                        </label>
+                        <span class="form-error" id="terms-error" hidden>Debes aceptar los términos y condiciones para continuar.</span>
+
+                        <label class="consent-checkbox-label">
+                            <input type="checkbox" id="consent-marketing" name="marketing_opt_in" class="consent-checkbox">
+                            <span class="consent-text">
+                                Deseo recibir actualizaciones pedagógicas, nuevos recursos de salud femenina y avisos de la Academia. (Opcional)
+                            </span>
+                        </label>
+                    </div>
+
+                    <!-- Botón de Envío -->
+                    <div class="checkout-actions">
+                        <button type="submit" id="btn-submit-order" class="btn btn-primary btn-checkout-submit">
+                            <span class="btn-text">Confirmar Pedido — <span id="submit-btn-price">Bs 199</span></span>
+                            <span class="btn-spinner" hidden aria-hidden="true"></span>
+                        </button>
+                        <span class="checkout-guarantee-note">
+                            🔒 Transacción segura · Precios oficiales controlados por servidor (BOB)
+                        </span>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Estado 2: Confirmación Exitosa (Zero PII) -->
+            <div id="checkout-confirmation-container" hidden>
+                <div class="confirmation-card">
+                    <div class="confirmation-icon-wrapper">
+                        <svg class="confirmation-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                        </svg>
+                    </div>
+                    <h3 class="confirmation-title">¡Pedido Registrado con Éxito!</h3>
+                    <p class="confirmation-subtitle">
+                        Tu intención de compra ha sido confirmada por el servidor comercial.
+                    </p>
+
+                    <!-- Resumen Seguro de Pedido (Zero PII) -->
+                    <div class="order-secure-details">
+                        <div class="order-detail-row">
+                            <span class="detail-label">Número de Pedido:</span>
+                            <strong class="detail-value order-number-highlight" id="confirmed-order-number">DPS-20261102-1001</strong>
+                        </div>
+                        <div class="order-detail-row">
+                            <span class="detail-label">Producto:</span>
+                            <span class="detail-value" id="confirmed-product-title">Pack Completo: Mujer Informada</span>
+                        </div>
+                        <div class="order-detail-row">
+                            <span class="detail-label">Importe Total:</span>
+                            <strong class="detail-value" id="confirmed-total-amount">Bs 199.00 BOB</strong>
+                        </div>
+                        <div class="order-detail-row">
+                            <span class="detail-label">Estado Actual:</span>
+                            <span class="detail-badge status-pending" id="confirmed-status-badge">Pendiente de Pago</span>
+                        </div>
+                        <div class="order-detail-row">
+                            <span class="detail-label">Plazo de Validez:</span>
+                            <span class="detail-value" id="confirmed-expires-at">72 horas para coordinar pago</span>
+                        </div>
+                    </div>
+
+                    <!-- Pasos siguientes para pago en Bolivia -->
+                    <div class="confirmation-next-steps">
+                        <h4>Pasos para completar tu acceso:</h4>
+                        <ol class="next-steps-list">
+                            <li>Envía tu <strong>Número de Pedido</strong> por WhatsApp al equipo de admisiones.</li>
+                            <li>Realiza tu pago mediante <strong>QR Simple</strong> o transferencia bancaria en moneda nacional (BOB).</li>
+                            <li>Una vez validado el comprobante, recibirás tus credenciales de estudio en el campus virtual.</li>
+                        </ol>
+                    </div>
+
+                    <!-- Botones de Acción -->
+                    <div class="confirmation-actions">
+                        <a id="btn-whatsapp-payment" href="#" target="_blank" class="btn btn-whatsapp btn-full-width">
+                            <span>📲 Coordinar Pago por WhatsApp</span>
+                        </a>
+                        <button type="button" id="btn-check-order-status" class="btn btn-secondary btn-full-width">
+                            🔄 Verificar Estado del Pedido
+                        </button>
+                        <button type="button" id="btn-close-confirmation" class="btn btn-outline btn-full-width">
+                            Cerrar y Volver a la Web
+                        </button>
+                    </div>
+
+                    <div class="status-lookup-feedback" id="status-lookup-feedback" hidden>
+                        <!-- Actualización en tiempo real del estado -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script de Checkout Unificado (Gate 2-A2) -->
+    <script src="js/checkout.js"></script>
 </body>
 
 </html>
