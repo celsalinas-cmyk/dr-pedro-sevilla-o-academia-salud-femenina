@@ -27,6 +27,9 @@
         </div>
     </header>
 
+    <!-- Main Content Landmark -->
+    <main id="main-content">
+
     <!-- Hero Section -->
     <section class="hero">
         <div class="container">
@@ -132,11 +135,11 @@
                             <span class="price-note">*Precio referencial de validación para Staging</span>
                         </div>
                         <div class="bundle-action-wrapper">
-                            <button type="button" class="btn btn-primary btn-bundle btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible tras validación de pasarela de pago.">
+                            <button type="button" class="btn btn-primary btn-bundle btn-open-checkout" data-action="open-checkout" data-sku="mujer-informada-4" aria-haspopup="dialog" aria-controls="checkout-modal">
                                 <span>Comprar los 4 cursos — Bs 199</span>
-                                <span class="cta-sub">Staging · Próximamente</span>
+                                <span class="cta-sub">Registro de Pedido · Coordinación Asistida</span>
                             </button>
-                            <span class="staging-notice-micro">⚠️ Botón inactivo durante fase de homologación Staging</span>
+                            <span class="staging-notice-micro">🔒 Pedido registrado · Pago QR bancario asistido por operador</span>
                         </div>
                     </div>
                 </div>
@@ -147,23 +150,23 @@
                 <div class="how-it-works-header">
                     <span class="courses-subtitle">Guía de Aprendizaje</span>
                     <h3>¿Cómo funciona la Academia?</h3>
-                    <p class="how-it-works-note">Flujo previsto para la próxima etapa comercial. En fase Staging, las compras y matrículas se encuentran temporalmente deshabilitadas.</p>
+                    <p class="how-it-works-note">Flujo operativo de la Academia Mujer Sana. En esta fase Staging (Gate 2-A2) está habilitado exclusivamente el registro de pedidos en pruebas (estado <em>Pendiente de Pago</em>); la emisión de QR bancario, el cobro efectivo y la matriculación en Moodle permanecen deshabilitados.</p>
                 </div>
                 <div class="how-it-works-steps">
                     <div class="how-step-card">
                         <div class="how-step-icon">1</div>
-                        <h4>Elige tu curso</h4>
-                        <p>Selecciona un tema individual de tu interés o adquiere el pack integral de 4 cursos para una formación completa en salud femenina.</p>
+                        <h4>Registra tu pedido</h4>
+                        <p>Selecciona un curso individual o el pack integral de 4 cursos y registra tu intención de compra segura en estado <em>Pendiente de Pago</em>.</p>
                     </div>
                     <div class="how-step-card">
                         <div class="how-step-icon">2</div>
-                        <h4>Realiza el pago</h4>
-                        <p>Pago seguro mediante código QR bancario y confirmación administrativa en tiempo real (activo a partir de Gate 3).</p>
+                        <h4>Pago QR asistido por operador</h4>
+                        <p>En operación comercial, un operador académico envía manualmente el QR bancario oficial y verifica el abono efectivo en el banco (deshabilitado en Staging).</p>
                     </div>
                     <div class="how-step-card">
                         <div class="how-step-icon">3</div>
-                        <h4>Accede a Moodle</h4>
-                        <p>Recibe tus credenciales personales para ingresar al campus virtual Moodle NOVARUM y aprende a tu propio ritmo.</p>
+                        <h4>Habilitación en Moodle</h4>
+                        <p>Únicamente tras la verificación bancaria del pago por el operador se procesa la matrícula en el campus Moodle NOVARUM (sin emisión de accesos en Staging).</p>
                     </div>
                 </div>
             </div>
@@ -224,8 +227,8 @@
                             <span class="amount-single">Bs 79</span>
                             <span class="price-single-note">Staging</span>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible.">
-                            Comprar curso — Bs 79 <span class="badge-tag-mini">Próximamente</span>
+                        <button type="button" class="btn btn-secondary btn-open-checkout" data-action="open-checkout" data-sku="endometriosis" aria-haspopup="dialog" aria-controls="checkout-modal">
+                            Comprar curso — Bs 79
                         </button>
                     </div>
                 </article>
@@ -248,8 +251,8 @@
                             <span class="amount-single">Bs 79</span>
                             <span class="price-single-note">Staging</span>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible.">
-                            Comprar curso — Bs 79 <span class="badge-tag-mini">Próximamente</span>
+                        <button type="button" class="btn btn-secondary btn-open-checkout" data-action="open-checkout" data-sku="vaginosis" aria-haspopup="dialog" aria-controls="checkout-modal">
+                            Comprar curso — Bs 79
                         </button>
                     </div>
                 </article>
@@ -272,8 +275,8 @@
                             <span class="amount-single">Bs 79</span>
                             <span class="price-single-note">Staging</span>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible.">
-                            Comprar curso — Bs 79 <span class="badge-tag-mini">Próximamente</span>
+                        <button type="button" class="btn btn-secondary btn-open-checkout" data-action="open-checkout" data-sku="sop" aria-haspopup="dialog" aria-controls="checkout-modal">
+                            Comprar curso — Bs 79
                         </button>
                     </div>
                 </article>
@@ -296,8 +299,8 @@
                             <span class="amount-single">Bs 79</span>
                             <span class="price-single-note">Staging</span>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-staging-disabled" aria-disabled="true" data-tooltip="Compra deshabilitada en Staging. Próximamente disponible.">
-                            Comprar curso — Bs 79 <span class="badge-tag-mini">Próximamente</span>
+                        <button type="button" class="btn btn-secondary btn-open-checkout" data-action="open-checkout" data-sku="aprende-mujer" aria-haspopup="dialog" aria-controls="checkout-modal">
+                            Comprar curso — Bs 79
                         </button>
                     </div>
                 </article>
@@ -514,19 +517,21 @@
                     </div>
                 </div>
 
-                <!-- Aviso de Staging transparente sin formulario inútil -->
+                <!-- Aviso de Staging transparente (Gate 2-A2) -->
                 <div class="staging-phase-notice" role="note">
                     <div class="staging-phase-icon">ℹ️</div>
                     <div class="staging-phase-text">
-                        <strong>Fase Staging (Gate 1):</strong> La recepción de datos mediante formulario web automatizado se encuentra en proceso de homologación técnica para Gate 2 (con backend seguro, persistencia y consentimiento estricto). Mientras tanto, todas las consultas y citas se gestionan de forma directa y personalizada a través de los canales de WhatsApp correspondientes.
+                        <strong>Fase Staging (Gate 2-A2 — Pruebas de Registro):</strong> El formulario comercial del catálogo permite validar el registro seguro de pedidos en estado <em>Pendiente de Pago</em> con control de idempotencia. En este entorno de pruebas no se emiten códigos QR bancarios reales, no se realizan cobros y no se entregan accesos a Moodle. Para consultas médicas o académicas directas, utiliza los canales oficiales de WhatsApp.
                     </div>
                 </div>
             </div>
         </div>
     </section>
 
+    </main>
+
     <!-- Footer -->
-    <footer class="footer">
+    <footer class="footer" id="footer">
         <div class="container">
             <div class="footer-content">
                 <div class="footer-logo">
@@ -568,11 +573,11 @@
     <!-- Accessible Staging Toast Notification -->
     <div id="stagingToast" class="staging-toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
-    <!-- JavaScript for Header Effect, Accessible Staging Feedback and Safe Form Handling -->
+    <!-- JavaScript for Header Scroll Effect -->
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            // Header scroll effect
             const header = document.getElementById('header');
+            if (!header) return;
             window.addEventListener('scroll', () => {
                 if (window.scrollY > 50) {
                     header.classList.add('scrolled');
@@ -580,64 +585,240 @@
                     header.classList.remove('scrolled');
                 }
             });
-
-            // Accessible non-intrusive notification toast
-            const toast = document.getElementById('stagingToast');
-            let toastTimeout = null;
-
-            function showToast(title, message) {
-                if (!toast) return;
-                clearTimeout(toastTimeout);
-                toast.innerHTML = `
-                    <span class="staging-toast-icon">ℹ️</span>
-                    <div class="staging-toast-content">
-                        <div class="staging-toast-title">${title}</div>
-                        <p class="staging-toast-desc">${message}</p>
-                    </div>
-                    <button type="button" class="staging-toast-close" aria-label="Cerrar notificación">&times;</button>
-                `;
-                toast.classList.add('show');
-
-                const closeBtn = toast.querySelector('.staging-toast-close');
-                if (closeBtn) {
-                    closeBtn.addEventListener('click', () => {
-                        toast.classList.remove('show');
-                    });
-                }
-
-                toastTimeout = setTimeout(() => {
-                    toast.classList.remove('show');
-                }, 5000);
-            }
-
-            // Accessible handler for staging buttons (click and keyboard)
-            const stagingButtons = document.querySelectorAll('.btn-staging-disabled');
-            stagingButtons.forEach(btn => {
-                const triggerAction = (e) => {
-                    e.preventDefault();
-                    const tooltipMsg = btn.getAttribute('data-tooltip') || 
-                        'La compra y matriculación web se encuentran en fase de homologación técnica para Staging. Estará disponible próximamente.';
-                    showToast('Fase Staging — Preventa en Preparación', tooltipMsg);
-                };
-
-                btn.addEventListener('click', triggerAction);
-                btn.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        triggerAction(e);
-                    }
-                });
-            });
-
-            // Guard leadForm against submission in Staging
-            const form = document.getElementById('leadForm');
-            if (form) {
-                form.addEventListener('submit', (e) => {
-                    e.preventDefault();
-                    showToast('Registro Web en Homologación', 'El formulario web está inactivo en Staging. Por favor utiliza los canales directos de WhatsApp para atención inmediata.');
-                });
-            }
         });
     </script>
+
+    <!-- Modal Unificado de Compra (Gate 2-A2) -->
+    <div id="checkout-modal-backdrop" class="checkout-backdrop" hidden>
+        <div id="checkout-modal" class="checkout-modal" role="dialog" aria-modal="true" aria-labelledby="checkout-modal-title" aria-describedby="checkout-modal-subtitle" tabindex="-1">
+            <!-- Botón cerrar -->
+            <button type="button" class="checkout-modal-close" id="btn-close-checkout" aria-label="Cerrar ventana de compra">
+                &times;
+            </button>
+
+            <!-- Cabecera -->
+            <div class="checkout-header">
+                <span class="checkout-badge-academy">Academia Mujer Sana · Validación Staging</span>
+                <h3 id="checkout-modal-title" class="checkout-title">Finalizar Inscripción</h3>
+                <p id="checkout-modal-subtitle" class="checkout-subtitle">Completa tus datos para registrar tu pedido en pruebas de forma segura.</p>
+            </div>
+
+            <!-- Estado 1: Formulario de Compra -->
+            <div id="checkout-form-container">
+                <!-- Resumen del Producto Seleccionado -->
+                <div class="checkout-product-summary" id="checkout-product-summary">
+                    <div class="product-summary-info">
+                        <span class="product-summary-badge" id="checkout-product-tag">Pack Integral · 4 Cursos</span>
+                        <h4 class="product-summary-title" id="checkout-product-title">Pack Completo: Mujer Informada (4 Cursos)</h4>
+                        <span class="product-summary-sku" id="checkout-product-sku">SKU: mujer-informada-4</span>
+                    </div>
+                    <div class="product-summary-pricing">
+                        <span class="product-summary-amount" id="checkout-product-price">Bs 199</span>
+                        <span class="product-summary-currency">BOB</span>
+                    </div>
+                </div>
+
+                <!-- Selector rápido para cambiar entre los 5 cursos/pack -->
+                <div class="checkout-sku-switcher">
+                    <label for="checkout-sku-select" class="checkout-label-micro">Cambiar curso o paquete:</label>
+                    <select id="checkout-sku-select" class="checkout-select">
+                        <option value="mujer-informada-4">Pack Completo: Mujer Informada (4 Cursos) — Bs 199</option>
+                        <option value="endometriosis">Curso: Endometriosis (Del Dolor a la Comprensión) — Bs 79</option>
+                        <option value="vaginosis">Curso: Vaginosis Bacteriana (Reconocimiento y Cuidados) — Bs 79</option>
+                        <option value="sop">Curso: Síndrome de Ovario Poliquístico (SOP) — Bs 79</option>
+                        <option value="aprende-mujer">Curso: Aprende Mujer (Microbiota y pH) — Bs 79</option>
+                    </select>
+                </div>
+
+                <!-- Aviso de Intención Congelada (Protección Idempotente) -->
+                <div id="checkout-intent-locked-banner" class="checkout-intent-locked" role="status" aria-live="polite" hidden>
+                    <span class="intent-locked-text">
+                        🔒 <strong>Intención de compra protegida:</strong> Ya enviaste una solicitud que podría haber generado un pedido en el servidor. Tus datos, SKU y clave siguen congelados para evitar duplicados (iniciar otra intención sin verificar podría crear un segundo pedido).
+                    </span>
+                    <button type="button" id="btn-reset-intent" class="btn-link-reset">Iniciar nueva intención de compra</button>
+                </div>
+
+                <!-- Contenedor de Alerta / Error -->
+                <div id="checkout-error-alert" class="checkout-alert" role="alert" aria-live="assertive" aria-atomic="true" hidden>
+                    <div class="alert-icon" aria-hidden="true">⚠️</div>
+                    <div class="alert-content">
+                        <strong id="alert-title">Error en el pedido</strong>
+                        <p id="alert-message">Mensaje de error</p>
+                    </div>
+                    <div class="checkout-alert-actions">
+                        <button type="button" id="btn-retry-checkout" class="btn-retry" hidden>Reintentar</button>
+                        <button type="button" id="btn-new-intent" class="btn-new-intent" hidden>Nueva intención</button>
+                    </div>
+                </div>
+
+                <!-- Formulario -->
+                <form id="checkout-form" novalidate>
+                    <div class="form-group">
+                        <label for="checkout-name" class="form-label">
+                            Nombre Completo <span class="required">*</span>
+                        </label>
+                        <input type="text" id="checkout-name" name="name" class="form-input" 
+                               placeholder="Ej. Valeria Mendoza" required minlength="2" maxlength="80" 
+                               autocomplete="name" aria-describedby="name-helper name-error" aria-errormessage="name-error" aria-invalid="false">
+                        <span class="form-helper" id="name-helper">Como deseas que figure en tu constancia de estudio.</span>
+                        <span class="form-error" id="name-error" role="status" aria-live="polite" hidden>Por favor ingresa un nombre válido (2-80 caracteres).</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="checkout-email" class="form-label">
+                            Correo Electrónico <span class="required">*</span>
+                        </label>
+                        <input type="email" id="checkout-email" name="email" class="form-input" 
+                               placeholder="valeria@ejemplo.com" required maxlength="100" 
+                               autocomplete="email" aria-describedby="email-helper email-error" aria-errormessage="email-error" aria-invalid="false">
+                        <span class="form-helper" id="email-helper">Aquí recibirás los datos de tu pedido y confirmación.</span>
+                        <span class="form-error" id="email-error" role="status" aria-live="polite" hidden>Ingresa un correo electrónico válido.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="checkout-phone" class="form-label">
+                            WhatsApp / Celular <span class="optional">(Opcional)</span>
+                        </label>
+                        <input type="tel" id="checkout-phone" name="phone" class="form-input" 
+                               placeholder="+591 70000000" maxlength="20" autocomplete="tel"
+                               aria-describedby="phone-helper phone-error" aria-errormessage="phone-error" aria-invalid="false">
+                        <span class="form-helper" id="phone-helper">Facilita la coordinación posterior del pago QR asistido en Bolivia.</span>
+                        <span class="form-error" id="phone-error" role="status" aria-live="polite" hidden>El teléfono debe tener entre 7 y 15 dígitos numéricos.</span>
+                    </div>
+
+                    <!-- Consentimientos Separados -->
+                    <div class="consents-container">
+                        <label class="consent-checkbox-label">
+                            <input type="checkbox" id="consent-terms" name="terms_accepted" required class="consent-checkbox"
+                                   aria-describedby="terms-staging-note terms-error" aria-errormessage="terms-error" aria-invalid="false">
+                            <span class="consent-text" id="terms-staging-note">
+                                <strong>Acepto las Condiciones de Validación en Pruebas y Aviso de Privacidad (v1.0 — Staging).</strong>
+                                Entiendo que este flujo registra una orden en pruebas sin cobro automático y que el contenido de los cursos es 100% educativo (no reemplaza la consulta médica). <span class="required">*</span>
+                            </span>
+                        </label>
+                        <div class="legal-summary-trigger-row">
+                            <button type="button" id="btn-toggle-legal-terms" class="btn-link-legal" aria-expanded="false" aria-controls="checkout-legal-summary">
+                                Ver resumen de condiciones y tratamiento de datos (v1.0 — Staging)
+                            </button>
+                        </div>
+                        <div id="checkout-legal-summary" class="checkout-legal-summary" role="region" aria-label="Resumen de Condiciones y Privacidad en Staging" hidden>
+                            <p><strong>1. Alcance de Entorno Staging (v1.0):</strong> El presente formulario registra exclusivamente órdenes de prueba en estado <em>Pendiente de Pago</em> para validación técnica. No ejecuta cargos financieros, no emite códigos QR bancarios reales ni otorga credenciales de acceso a Moodle en esta etapa.</p>
+                            <p><strong>2. Minimización y Privacidad de Datos:</strong> Se almacenan únicamente nombre, correo electrónico, teléfono opcional y atribución de campaña (UTM) bajo aislamiento estricto de la Academia Mujer Sana (<code>dr-sevilla</code>), sin exponer datos personales en consultas públicas.</p>
+                            <p><strong>3. Naturaleza Educativa:</strong> Todo el material es estrictamente formativo y no constituye diagnóstico, prescripción ni acto médico.</p>
+                        </div>
+                        <span class="form-error" id="terms-error" role="status" aria-live="polite" hidden>Debes aceptar las condiciones de validación y privacidad para continuar.</span>
+
+                        <label class="consent-checkbox-label">
+                            <input type="checkbox" id="consent-marketing" name="marketing_opt_in" class="consent-checkbox">
+                            <span class="consent-text">
+                                Deseo recibir actualizaciones pedagógicas, nuevos recursos de salud femenina y avisos de la Academia. (Opcional)
+                            </span>
+                        </label>
+                    </div>
+
+                    <!-- Botón de Envío -->
+                    <div class="checkout-actions">
+                        <button type="submit" id="btn-submit-order" class="btn btn-primary btn-checkout-submit">
+                            <span class="btn-text">Confirmar Pedido — <span id="submit-btn-price">Bs 199</span></span>
+                            <span class="btn-spinner" hidden aria-hidden="true"></span>
+                        </button>
+                        <span class="checkout-guarantee-note">
+                            🔒 Transacción protegida por idempotencia · Precios oficiales validados en servidor (BOB)
+                        </span>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Estado 2: Confirmación Exitosa (Zero PII) -->
+            <div id="checkout-confirmation-container" role="region" aria-live="polite" aria-atomic="true" aria-labelledby="confirmation-heading" hidden>
+                <div class="confirmation-card">
+                    <div class="confirmation-icon-wrapper" aria-hidden="true">
+                        <svg class="confirmation-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                        </svg>
+                    </div>
+                    <h3 id="confirmation-heading" class="confirmation-title" tabindex="-1">¡Pedido Registrado en Pruebas!</h3>
+                    <p class="confirmation-subtitle">
+                        Tu intención de compra ha sido registrada por el servidor comercial en estado pendiente de pago.
+                    </p>
+
+                    <!-- Resumen Seguro de Pedido (Zero PII) -->
+                    <div class="order-secure-details">
+                        <div class="order-detail-row">
+                            <span class="detail-label">Número de Pedido:</span>
+                            <strong class="detail-value order-number-highlight" id="confirmed-order-number"></strong>
+                        </div>
+                        <div class="order-detail-row">
+                            <span class="detail-label">Producto:</span>
+                            <span class="detail-value" id="confirmed-product-title"></span>
+                        </div>
+                        <div class="order-detail-row">
+                            <span class="detail-label">Importe Total:</span>
+                            <strong class="detail-value" id="confirmed-total-amount"></strong>
+                        </div>
+                        <div class="order-detail-row">
+                            <span class="detail-label">Estado Actual:</span>
+                            <span class="detail-badge status-pending" id="confirmed-status-badge"></span>
+                        </div>
+                        <div class="order-detail-row">
+                            <span class="detail-label">Plazo de Validez:</span>
+                            <span class="detail-value" id="confirmed-expires-at"></span>
+                        </div>
+                    </div>
+
+                    <!-- Pasos siguientes para pago asistido por operador (Bolivia) -->
+                    <div class="confirmation-next-steps">
+                        <h4>Protocolo Operativo de Pago QR Asistido (Informativo):</h4>
+                        <ol class="next-steps-list">
+                            <li>Tu pedido queda registrado en estado <strong>Pendiente de Pago</strong> (<code>pending_payment</code>).</li>
+                            <li>En operación comercial, un operador académico recibe la solicitud y envía manualmente el <strong>QR bancario oficial</strong> (BOB).</li>
+                            <li>El operador <strong>verifica efectivamente el abono en la cuenta bancaria</strong> (el comprobante enviado por el comprador, por sí solo, no constituye pago verificado).</li>
+                            <li>Únicamente tras registrar el pago verificado en banco (<code>paid_verified</code>) se gestiona el alta en el campus Moodle.</li>
+                        </ol>
+                        <div class="staging-flow-note" id="staging-payment-notice">
+                            ⚠️ <strong>Aviso de Entorno Staging:</strong> La coordinación de cobros por QR bancario, los canales de pago por WhatsApp y la entrega de accesos a Moodle están <strong>deshabilitados en esta fase de pruebas</strong>.
+                        </div>
+                    </div>
+
+                    <!-- Botones de Acción -->
+                    <div class="confirmation-actions">
+                        <button type="button" id="btn-whatsapp-payment" class="btn btn-secondary btn-full-width btn-payment-disabled" disabled aria-disabled="true">
+                            <span>🔒 Coordinación de Pago QR (Deshabilitado en Staging)</span>
+                        </button>
+                        <button type="button" id="btn-check-order-status" class="btn btn-secondary btn-full-width">
+                            🔄 Verificar Estado del Pedido
+                        </button>
+                        <button type="button" id="btn-close-confirmation" class="btn btn-outline btn-full-width">
+                            Cerrar y Volver a la Web
+                        </button>
+                    </div>
+
+                    <div class="status-lookup-feedback" id="status-lookup-feedback" role="status" aria-live="polite" hidden>
+                        <!-- Actualización en tiempo real del estado -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuración Explícita de Entorno para el Motor Comercial (Gate 2-A2) -->
+    <!-- Sin endpoint ficticio predeterminado: si el entorno de ejecución no inyecta un origen
+         operativo en window.NOVARUM_API_BASE (o meta[name="novarum-api-base"]), el checkout
+         permanece bloqueado de forma segura y comprensible. -->
+    <script id="novarum-runtime-config">
+        window.NOVARUM_RUNTIME_ENV = window.NOVARUM_RUNTIME_ENV || 'staging';
+        if (typeof window.NOVARUM_API_BASE === 'undefined') {
+            const metaApiBase = document.querySelector('meta[name="novarum-api-base"]');
+            window.NOVARUM_API_BASE = metaApiBase ? (metaApiBase.getAttribute('content') || '').trim() : '';
+        }
+        if (typeof window.NOVARUM_ENABLE_PAYMENT_COORDINATION === 'undefined') {
+            window.NOVARUM_ENABLE_PAYMENT_COORDINATION = false;
+        }
+    </script>
+
+    <!-- Script de Checkout Unificado (Gate 2-A2) -->
+    <script src="js/checkout.js"></script>
 </body>
 
 </html>

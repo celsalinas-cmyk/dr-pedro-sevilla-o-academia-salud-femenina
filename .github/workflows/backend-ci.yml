@@ -4,9 +4,14 @@ on:
   pull_request:
     paths:
       - 'backend/**'
+      - 'index.html'
+      - 'js/**'
+      - 'css/**'
+      - '.github/workflows/**'
   push:
     branches:
       - feature/gate2-commerce-core
+      - feature/gate2-a2-checkout-ui
 
 jobs:
   test-linux:
