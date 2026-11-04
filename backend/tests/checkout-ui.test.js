@@ -231,6 +231,10 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
     assert.ok(htmlContent.includes('aria-modal="true"'), 'Modal must have aria-modal="true"');
     assert.ok(htmlContent.includes('id="novarum-runtime-config"'), 'HTML must configure window.NOVARUM_API_BASE before loading checkout.js');
     assert.ok(htmlContent.includes('window.NOVARUM_API_BASE'), 'HTML must explicitly define window.NOVARUM_API_BASE');
+    assert.ok(
+      !htmlContent.includes('api.academia.drpedrosevilla.com'),
+      'HTML must NOT include fictitious or non-resolvable default API hostname'
+    );
 
     // Verify payment coordination button is disabled by default in HTML
     assert.match(
@@ -318,152 +322,178 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
     assert.match(data.order_number, /^DPS-\d{8}-\d+$/);
   });
 
-  await t.test('5. Static Guardrails: Zero innerHTML, Zero DPS-XXXXX fallback, Zero auto-regen on 409', () => {
+  await t.test('5. Static Guardrails: Zero innerHTML, Zero DPS-XXXXX fallback, Strict 64-hex token regex', () => {
     assert.ok(!jsContent.includes('innerHTML'), 'js/checkout.js must never use innerHTML');
     assert.ok(!jsContent.includes('DPS-XXXXX'), 'js/checkout.js must not contain fake order number fallback DPS-XXXXX');
+    assert.ok(!jsContent.includes('api.academia.drpedrosevilla.com'), 'js/checkout.js must not contain fictitious API hostname');
     assert.ok(
       jsContent.includes('ALLOWED_ORDER_STATUSES'),
       'js/checkout.js must strictly whitelist backend contract statuses'
     );
     assert.ok(!jsContent.includes("'confirmed'"), 'js/checkout.js must not reference non-contract status confirmed');
+    assert.ok(jsContent.includes('/^[a-f0-9]{64}$/i'), 'js/checkout.js must enforce exact 64-char hex opaque_token validation');
+    assert.ok(!jsContent.includes('{32,128}'), 'js/checkout.js must not allow 32-128 char token range');
   });
 
-  await t.test('6. Real Headless Browser (Chrome CDP) End-to-End Verification of All 9 Codex Controls', async (subT) => {
+  await t.test('6. Real Headless Browser (Chrome CDP) Multi-Origin E2E Verification of All Gate 2-A2 Controls', async (subT) => {
     const chromeBin = findChromeExecutable();
     assert.ok(chromeBin, 'Chrome or Chromium executable must be available for real browser E2E testing');
 
-    // Control flags for simulating network/server edge cases on the real HTTP proxy server
-    let dropNextCheckoutResponseAfterPersist = false;
+    // Control flags for simulating network/server edge cases on the real API HTTP server
     let delayCheckoutMs = 0;
     let overrideCheckoutResponse = null;
     let overrideStatusResponse = null;
     let checkoutRequestCount = 0;
+    const corsTrafficLog = [];
 
-    // Create a local HTTP server that serves static assets AND proxies /api/v1/* to Fastify `app`
-    const server = http.createServer(async (req, res) => {
+    // 1. Dedicated Backend API Server on its own origin (http://127.0.0.1:${apiPort})
+    // Delegates CORS preflight (OPTIONS) and POST/GET headers strictly to Fastify (@fastify/cors)
+    const apiServer = http.createServer(async (req, res) => {
       try {
         const parsedUrl = new URL(req.url, 'http://127.0.0.1');
+        const chunks = [];
+        for await (const chunk of req) {
+          chunks.push(chunk);
+        }
+        const rawBody = Buffer.concat(chunks).toString('utf8');
 
-        // Handle API routes via Fastify inject (with CORS headers and fault-injection hooks)
-        if (parsedUrl.pathname.startsWith('/api/') || parsedUrl.pathname === '/health') {
-          const chunks = [];
-          for await (const chunk of req) {
-            chunks.push(chunk);
-          }
-          const rawBody = Buffer.concat(chunks).toString('utf8');
+        if (parsedUrl.pathname === '/api/v1/checkout' && req.method === 'POST') {
+          checkoutRequestCount += 1;
 
-          if (parsedUrl.pathname === '/api/v1/checkout' && req.method === 'POST') {
-            checkoutRequestCount += 1;
-
-            if (delayCheckoutMs > 0) {
-              await new Promise((r) => setTimeout(r, delayCheckoutMs));
-            }
-
-            if (overrideCheckoutResponse) {
-              const custom = overrideCheckoutResponse;
-              overrideCheckoutResponse = null;
-              res.writeHead(custom.statusCode, {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': req.headers.origin || '*',
-              });
-              res.end(JSON.stringify(custom.body));
-              return;
-            }
+          if (delayCheckoutMs > 0) {
+            await new Promise((r) => setTimeout(r, delayCheckoutMs));
           }
 
-          if (parsedUrl.pathname.endsWith('/status') && req.method === 'GET' && overrideStatusResponse) {
-            const custom = overrideStatusResponse;
-            overrideStatusResponse = null;
-            res.writeHead(custom.statusCode, {
-              'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': req.headers.origin || '*',
-            });
+          if (overrideCheckoutResponse) {
+            const custom = overrideCheckoutResponse;
+            overrideCheckoutResponse = null;
+            const headers = { 'Content-Type': 'application/json' };
+            if (req.headers.origin && config.allowedOrigins.includes(req.headers.origin)) {
+              headers['Access-Control-Allow-Origin'] = req.headers.origin;
+              headers['Access-Control-Allow-Credentials'] = 'true';
+            }
+            res.writeHead(custom.statusCode, headers);
             res.end(JSON.stringify(custom.body));
             return;
           }
+        }
 
-          const injectRes = await app.inject({
-            method: req.method,
-            url: parsedUrl.pathname + parsedUrl.search,
-            headers: {
-              ...req.headers,
-              host: '127.0.0.1',
-            },
-            payload: rawBody || undefined,
-          });
-
-          // Simulate lost/dropped network response AFTER order was persisted in PostgreSQL/pg-mem
-          if (dropNextCheckoutResponseAfterPersist && parsedUrl.pathname === '/api/v1/checkout' && req.method === 'POST') {
-            dropNextCheckoutResponseAfterPersist = false;
-            res.writeHead(200, {
-              'Content-Type': 'application/json',
-              'Transfer-Encoding': 'chunked',
-              Connection: 'close',
-            });
-            res.write('4\r\n{"or');
-            req.socket.destroy();
-            return;
+        if (parsedUrl.pathname.endsWith('/status') && req.method === 'GET' && overrideStatusResponse) {
+          const custom = overrideStatusResponse;
+          overrideStatusResponse = null;
+          const headers = { 'Content-Type': 'application/json' };
+          if (req.headers.origin && config.allowedOrigins.includes(req.headers.origin)) {
+            headers['Access-Control-Allow-Origin'] = req.headers.origin;
+            headers['Access-Control-Allow-Credentials'] = 'true';
           }
-
-          const responseHeaders = { ...injectRes.headers };
-          if (req.headers.origin) {
-            responseHeaders['access-control-allow-origin'] = req.headers.origin;
-          }
-          res.writeHead(injectRes.statusCode, responseHeaders);
-          res.end(injectRes.body);
+          res.writeHead(custom.statusCode, headers);
+          res.end(JSON.stringify(custom.body));
           return;
         }
 
-        // Serve static frontend files
-        let filePath = parsedUrl.pathname === '/' ? '/index.html' : parsedUrl.pathname;
-        const safePath = path.normalize(filePath).replace(/^(\.\.(\/|\\|$))+/, '');
-        const fullPath = path.join(rootDir, safePath);
+        const injectRes = await app.inject({
+          method: req.method,
+          url: parsedUrl.pathname + parsedUrl.search,
+          headers: {
+            ...req.headers,
+            host: `127.0.0.1:${apiServer.address().port}`,
+          },
+          payload: rawBody || undefined,
+        });
 
-        if (!fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
-          res.writeHead(404);
-          res.end('Not found');
-          return;
-        }
+        corsTrafficLog.push({
+          method: req.method,
+          path: parsedUrl.pathname,
+          origin: req.headers.origin || null,
+          acrm: req.headers['access-control-request-method'] || null,
+          statusCode: injectRes.statusCode,
+          acao: injectRes.headers['access-control-allow-origin'] || null,
+          acam: injectRes.headers['access-control-allow-methods'] || null,
+        });
 
-        const ext = path.extname(fullPath).toLowerCase();
-        const mimeTypes = {
-          '.html': 'text/html; charset=utf-8',
-          '.css': 'text/css; charset=utf-8',
-          '.js': 'application/javascript; charset=utf-8',
-          '.jpg': 'image/jpeg',
-          '.png': 'image/png',
-          '.svg': 'image/svg+xml',
-        };
-
-        let content = fs.readFileSync(fullPath);
-        // Inject the live test server URL into index.html's runtime config so initial load points to our test server
-        if (safePath === '/index.html' || safePath === 'index.html') {
-          const addr = server.address();
-          const testOrigin = `http://127.0.0.1:${addr.port}`;
-          content = Buffer.from(
-            content
-              .toString('utf8')
-              .replace(/<link[^>]*fonts\.googleapis\.com[^>]*>/g, '')
-              .replace(/<link[^>]*fonts\.gstatic\.com[^>]*>/g, '')
-              .replace('https://api.academia.drpedrosevilla.com', testOrigin),
-            'utf8'
-          );
-        }
-
-        res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
-        res.end(content);
+        res.writeHead(injectRes.statusCode, injectRes.headers);
+        res.end(injectRes.body);
       } catch (err) {
         res.writeHead(500);
         res.end(String(err));
       }
     });
 
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const serverPort = server.address().port;
-    const baseUrl = `http://127.0.0.1:${serverPort}`;
-    if (!config.allowedOrigins.includes(baseUrl)) {
-      config.allowedOrigins.push(baseUrl);
+    await new Promise((resolve) => apiServer.listen(0, '127.0.0.1', resolve));
+    const apiPort = apiServer.address().port;
+    const apiOrigin = `http://127.0.0.1:${apiPort}`;
+
+    // Helper to create a static frontend server on a distinct origin
+    function createStaticFrontendServer() {
+      return http.createServer((req, res) => {
+        try {
+          const parsedUrl = new URL(req.url, 'http://127.0.0.1');
+          let filePath = parsedUrl.pathname === '/' ? '/index.html' : parsedUrl.pathname;
+          const safePath = path.normalize(filePath).replace(/^(\.\.(\/|\\|$))+/, '');
+          const fullPath = path.join(rootDir, safePath);
+
+          if (!fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
+            res.writeHead(404);
+            res.end('Not found');
+            return;
+          }
+
+          const ext = path.extname(fullPath).toLowerCase();
+          const mimeTypes = {
+            '.html': 'text/html; charset=utf-8',
+            '.css': 'text/css; charset=utf-8',
+            '.js': 'application/javascript; charset=utf-8',
+            '.jpg': 'image/jpeg',
+            '.png': 'image/png',
+            '.svg': 'image/svg+xml',
+          };
+
+          let content = fs.readFileSync(fullPath);
+          if (safePath === '/index.html' || safePath === 'index.html') {
+            let htmlStr = content
+              .toString('utf8')
+              .replace(/<link[^>]*fonts\.googleapis\.com[^>]*>/g, '')
+              .replace(/<link[^>]*fonts\.gstatic\.com[^>]*>/g, '');
+
+            // Unless ?api_mode=unconfigured is requested, inject explicit environment meta tag pointing to apiOrigin
+            if (parsedUrl.searchParams.get('api_mode') !== 'unconfigured') {
+              htmlStr = htmlStr.replace(
+                '</head>',
+                `    <meta name="novarum-api-base" content="${apiOrigin}">\n</head>`
+              );
+            }
+            content = Buffer.from(htmlStr, 'utf8');
+          }
+
+          res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
+          res.end(content);
+        } catch (err) {
+          res.writeHead(500);
+          res.end(String(err));
+        }
+      });
     }
+
+    // 2. Authorized Frontend Server on a second distinct origin (http://127.0.0.1:${frontendPort})
+    const frontendServer = createStaticFrontendServer();
+    await new Promise((resolve) => frontendServer.listen(0, '127.0.0.1', resolve));
+    const frontendPort = frontendServer.address().port;
+    const frontendOrigin = `http://127.0.0.1:${frontendPort}`;
+    if (!config.allowedOrigins.includes(frontendOrigin)) {
+      config.allowedOrigins.push(frontendOrigin);
+    }
+
+    // 3. Unauthorized Frontend Server on a third distinct origin (http://127.0.0.1:${untrustedPort})
+    // Deliberately NOT added to config.allowedOrigins
+    const untrustedFrontendServer = createStaticFrontendServer();
+    await new Promise((resolve) => untrustedFrontendServer.listen(0, '127.0.0.1', resolve));
+    const untrustedPort = untrustedFrontendServer.address().port;
+    const untrustedOrigin = `http://127.0.0.1:${untrustedPort}`;
+    config.allowedOrigins = config.allowedOrigins.filter((o) => o !== untrustedOrigin);
+
+    assert.notEqual(frontendPort, apiPort, 'Frontend and API must run on different ports (distinct origins)');
+    assert.notEqual(untrustedPort, apiPort, 'Untrusted frontend and API must run on different ports');
+    assert.notEqual(frontendPort, untrustedPort, 'Authorized and untrusted frontends must run on different ports');
 
     // Launch Headless Chrome with stdio: 'ignore' so Linux crashpad daemons never hold pipes open
     const debugPort = await getFreePort();
@@ -484,7 +514,7 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         '--disable-background-networking',
         `--remote-debugging-port=${debugPort}`,
         `--user-data-dir=${userDataDir}`,
-        `${baseUrl}/index.html?utm_source=tiktok&utm_campaign=gate2_e2e`,
+        `${frontendOrigin}/index.html?utm_source=tiktok&utm_campaign=gate2_e2e`,
       ],
       { stdio: 'ignore', detached: true }
     );
@@ -511,19 +541,25 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
 
-    // Wait until window.NovarumCheckout is initialized in page
-    for (let i = 0; i < 40; i++) {
-      const ready = await cdp.evaluate('Boolean(window.NovarumCheckout && document.readyState === "complete")');
-      if (ready) break;
-      await new Promise((r) => setTimeout(r, 100));
+    async function waitForPageReady() {
+      for (let i = 0; i < 50; i++) {
+        try {
+          const ready = await cdp.evaluate('Boolean(window.NovarumCheckout && document.readyState === "complete")');
+          if (ready) return;
+        } catch (_) {}
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error('Timed out waiting for window.NovarumCheckout page readiness');
     }
+
+    await waitForPageReady();
 
     try {
       // -----------------------------------------------------------------------
       // E2E 6.1: Accessibility, Focus Trap, Inert Background & Focus Return
       // -----------------------------------------------------------------------
       await subT.test('6.1 Browser Accessibility: inert background, Tab/Shift+Tab trap, ARIA invalid & focus return', async () => {
-        await cdp. send('Emulation.setDeviceMetricsOverride', {
+        await cdp.send('Emulation.setDeviceMetricsOverride', {
           width: 1280,
           height: 800,
           deviceScaleFactor: 1,
@@ -584,7 +620,6 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
 
         // Test Tab wrap from last focusable element to first focusable element inside modal
         const tabWrapResult = await cdp.evaluate(`(() => {
-          const modal = document.getElementById('checkout-modal');
           const closeBtn = document.getElementById('btn-close-checkout');
           const submitBtn = document.getElementById('btn-submit-order');
 
@@ -624,80 +659,116 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
       });
 
       // -----------------------------------------------------------------------
-      // E2E 6.2: Explicit & Validated API Base Configuration (P1 #4)
+      // E2E 6.2: Explicit API Config Guard & Multi-Origin CORS (P1 #2)
       // -----------------------------------------------------------------------
-      await subT.test('6.2 Browser API Config Guard: blocks missing/empty/invalid NOVARUM_API_BASE without network requests', async () => {
+      await subT.test('6.2 Browser API Config & Multi-Origin CORS: default unconfigured block, unauthorized origin preflight block & authorized cross-origin preflight/POST', async () => {
         const beforeCount = checkoutRequestCount;
 
-        const invalidConfigCheck = await cdp.evaluate(`(async () => {
-          const originalBase = window.NOVARUM_API_BASE;
+        // Part A: Navigate to raw unconfigured index.html (?api_mode=unconfigured)
+        // Verifies that without environment injection, NOVARUM_API_BASE is '' (no fictitious URL) and checkout is blocked
+        await cdp.send('Page.navigate', { url: `${frontendOrigin}/index.html?api_mode=unconfigured` });
+        await waitForPageReady();
 
-          // Case A: empty string ''
-          window.NOVARUM_API_BASE = '';
-          const resolvedEmpty = window.NovarumCheckout.resolveValidApiBase();
+        const defaultUnconfiguredState = await cdp.evaluate(`(async () => {
+          const defaultRawBase = window.NOVARUM_API_BASE;
+          const resolvedDefault = window.NovarumCheckout.resolveValidApiBase();
+
           window.NovarumCheckout.openCheckout('sop');
+          const submitDisabledOnOpen = document.getElementById('btn-submit-order').disabled;
+          const alertHiddenOnOpen = document.getElementById('checkout-error-alert').hidden;
+          const alertTitleOnOpen = document.getElementById('alert-title').textContent;
+
           document.getElementById('checkout-name').value = 'Valeria Mendoza';
           document.getElementById('checkout-email').value = 'valeria@ejemplo.com';
           document.getElementById('consent-terms').checked = true;
           await window.NovarumCheckout.submitCheckout();
-          const alertHiddenEmpty = document.getElementById('checkout-error-alert').hidden;
-          const alertTitleEmpty = document.getElementById('alert-title').textContent;
 
-          // Case B: malformed URL
+          // Also check malformed URLs
           window.NOVARUM_API_BASE = 'not-a-valid-http-origin';
           const resolvedMalformed = window.NovarumCheckout.resolveValidApiBase();
-
-          // Restore valid API base
-          window.NOVARUM_API_BASE = originalBase;
-          const resolvedRestored = window.NovarumCheckout.resolveValidApiBase();
-          window.NovarumCheckout.closeCheckout();
+          window.NOVARUM_API_BASE = 'ftp://example.com';
+          const resolvedFtp = window.NovarumCheckout.resolveValidApiBase();
 
           return {
-            resolvedEmpty,
-            alertHiddenEmpty,
-            alertTitleEmpty,
+            defaultRawBase,
+            resolvedDefault,
+            submitDisabledOnOpen,
+            alertHiddenOnOpen,
+            alertTitleOnOpen,
             resolvedMalformed,
-            resolvedRestored,
+            resolvedFtp,
           };
         })()`);
 
-        assert.equal(invalidConfigCheck.resolvedEmpty, null, 'Empty string NOVARUM_API_BASE must resolve to null');
-        assert.equal(invalidConfigCheck.alertHiddenEmpty, false, 'Error alert must be displayed when API base is missing');
-        assert.match(invalidConfigCheck.alertTitleEmpty, /Servicio comercial no configurado/);
-        assert.equal(invalidConfigCheck.resolvedMalformed, null, 'Malformed URL must resolve to null');
-        assert.equal(invalidConfigCheck.resolvedRestored, baseUrl, 'Valid baseUrl must resolve cleanly');
+        assert.equal(defaultUnconfiguredState.defaultRawBase, '', 'Default static NOVARUM_API_BASE must be empty string (no fictitious URL)');
+        assert.equal(defaultUnconfiguredState.resolvedDefault, null, 'Unconfigured NOVARUM_API_BASE must resolve to null');
+        assert.equal(defaultUnconfiguredState.submitDisabledOnOpen, true, 'Submit button must be disabled when API is not configured');
+        assert.equal(defaultUnconfiguredState.alertHiddenOnOpen, false, 'Comprehensible block alert must be shown when API is not configured');
+        assert.match(defaultUnconfiguredState.alertTitleOnOpen, /Servicio comercial no configurado/);
+        assert.equal(defaultUnconfiguredState.resolvedMalformed, null);
+        assert.equal(defaultUnconfiguredState.resolvedFtp, null);
         assert.equal(checkoutRequestCount, beforeCount, 'Zero network requests may be sent when API config is missing/invalid');
 
-        // Verify CORS enforcement on backend for allowed vs disallowed Origin
-        const allowedCorsRes = await app.inject({
-          method: 'OPTIONS',
-          url: '/api/v1/checkout',
-          headers: {
-            Origin: 'https://drpedrosevilla.com',
-            'Access-Control-Request-Method': 'POST',
-          },
-        });
-        assert.equal(allowedCorsRes.headers['access-control-allow-origin'], 'https://drpedrosevilla.com');
+        // Part B: Navigate Chrome to UNAUTHORIZED Frontend Origin (http://127.0.0.1:${untrustedPort})
+        // pointing at API Origin (http://127.0.0.1:${apiPort}).
+        // Browser will execute a real cross-origin OPTIONS preflight which Fastify CORS rejects!
+        corsTrafficLog.length = 0;
+        await cdp.send('Page.navigate', { url: `${untrustedOrigin}/index.html` });
+        await waitForPageReady();
 
-        const blockedCorsRes = await app.inject({
-          method: 'OPTIONS',
-          url: '/api/v1/checkout',
-          headers: {
-            Origin: 'https://evil-untrusted-origin.example.com',
-            'Access-Control-Request-Method': 'POST',
-          },
-        });
-        assert.equal(blockedCorsRes.headers['access-control-allow-origin'], undefined);
+        const untrustedCorsAttempt = await cdp.evaluate(`(async () => {
+          window.NovarumCheckout.openCheckout('sop');
+          document.getElementById('checkout-name').value = 'Intento Origen No Autorizado';
+          document.getElementById('checkout-email').value = 'cors.untrusted@ejemplo.com';
+          document.getElementById('consent-terms').checked = true;
+
+          await window.NovarumCheckout.submitCheckout();
+
+          return {
+            pageOrigin: window.location.origin,
+            apiBase: window.NovarumCheckout.resolveValidApiBase(),
+            confirmationHidden: document.getElementById('checkout-confirmation-container').hidden,
+            alertHidden: document.getElementById('checkout-error-alert').hidden,
+            alertTitle: document.getElementById('alert-title').textContent,
+            snapshotLocked: window.NovarumCheckout.getIntentSnapshot() !== null,
+          };
+        })()`);
+
+        assert.equal(untrustedCorsAttempt.pageOrigin, untrustedOrigin);
+        assert.equal(untrustedCorsAttempt.apiBase, apiOrigin);
+        assert.notEqual(untrustedCorsAttempt.pageOrigin, untrustedCorsAttempt.apiBase, 'Must be a cross-origin request');
+        assert.equal(untrustedCorsAttempt.confirmationHidden, true, 'Confirmation must remain hidden when CORS blocks request');
+        assert.equal(untrustedCorsAttempt.alertHidden, false, 'UI must display network/CORS error alert cleanly');
+        assert.match(untrustedCorsAttempt.alertTitle, /Sin conexión al servidor/);
+        assert.equal(untrustedCorsAttempt.snapshotLocked, true, 'Intent must remain locked after CORS/network failure');
+
+        // Verify that apiServer received the real browser OPTIONS preflight from untrustedOrigin and did NOT grant ACAO
+        const untrustedPreflight = corsTrafficLog.find(
+          (entry) => entry.method === 'OPTIONS' && entry.path === '/api/v1/checkout' && entry.origin === untrustedOrigin
+        );
+        assert.ok(untrustedPreflight, 'Browser must send real OPTIONS preflight from unauthorized origin to API origin');
+        assert.equal(untrustedPreflight.acrm, 'POST');
+        assert.equal(untrustedPreflight.acao, null, 'API server must NOT return Access-Control-Allow-Origin for unauthorized origin');
+
+        const untrustedPost = corsTrafficLog.find(
+          (entry) => entry.method === 'POST' && entry.path === '/api/v1/checkout' && entry.origin === untrustedOrigin
+        );
+        assert.equal(untrustedPost, undefined, 'Browser must block POST request after failed CORS preflight');
+
+        // Navigate back to Authorized Frontend Origin (http://127.0.0.1:${frontendPort}) for subsequent tests
+        await cdp.send('Page.navigate', { url: `${frontendOrigin}/index.html?utm_source=tiktok&utm_campaign=gate2_e2e` });
+        await waitForPageReady();
       });
 
       // -----------------------------------------------------------------------
-      // E2E 6.3: Persisted Order + Lost Response + Edit Attempt -> Never Creates 2 Orders (P1 #1)
+      // E2E 6.3: Commercial Intent Persistence Across Close & Reopen (Codex 6-Step Sequence — P1 #1)
       // -----------------------------------------------------------------------
-      await subT.test('6.3 Browser Immutable Intent: persisted order + lost response + DOM edit attempt -> 1 order total', async () => {
+      await subT.test('6.3 Browser Intent Persistence Across Close & Reopen: persisted order + lost response + close/reopen + SKU/DOM edit blocked + retry -> 1 order total', async () => {
         const testEmail = 'valeria.lost.response@ejemplo.com';
+        corsTrafficLog.length = 0;
 
-        // 1. Open checkout for endometriosis, fill valid data, and submit.
-        // Simulate lost response AFTER server commits the order in DB.
+        // Steps 1 & 2: User confirms an order for 'endometriosis', backend persists it (across distinct origins with preflight),
+        // and the network response is lost before reaching the browser.
         const afterDropState = await cdp.evaluate(`(async () => {
           window.NovarumCheckout.openCheckout('endometriosis');
           document.getElementById('checkout-name').value = 'Valeria Mendoza';
@@ -710,7 +781,7 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
           const origFetch = window.fetch.bind(window);
           window.fetch = async (...args) => {
             const response = await origFetch(...args);
-            // Restore original fetch and throw network error after server persisted the order
+            // Restore original fetch and simulate dropped connection after server persisted the order
             window.fetch = origFetch;
             throw new TypeError('Failed to fetch: connection lost after server commit');
           };
@@ -718,6 +789,8 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
           await window.NovarumCheckout.submitCheckout();
 
           return {
+            pageOrigin: window.location.origin,
+            apiBase: window.NovarumCheckout.resolveValidApiBase(),
             initialKey,
             keyAfterDrop: window.NovarumCheckout.getIdempotencyKey(),
             alertHidden: document.getElementById('checkout-error-alert').hidden,
@@ -728,6 +801,23 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
           };
         })()`);
 
+        // Verify real cross-origin preflight + POST occurred between frontendOrigin and apiOrigin
+        assert.equal(afterDropState.pageOrigin, frontendOrigin);
+        assert.equal(afterDropState.apiBase, apiOrigin);
+        const authorizedPreflight = corsTrafficLog.find(
+          (entry) => entry.method === 'OPTIONS' && entry.path === '/api/v1/checkout' && entry.origin === frontendOrigin
+        );
+        assert.ok(authorizedPreflight, 'Browser must send real cross-origin OPTIONS preflight from authorized frontend origin');
+        assert.equal(authorizedPreflight.statusCode, 204);
+        assert.equal(authorizedPreflight.acao, frontendOrigin);
+
+        const authorizedPost = corsTrafficLog.find(
+          (entry) => entry.method === 'POST' && entry.path === '/api/v1/checkout' && entry.origin === frontendOrigin
+        );
+        assert.ok(authorizedPost, 'Browser must send cross-origin POST after preflight approval');
+        assert.equal(authorizedPost.statusCode, 201);
+        assert.equal(authorizedPost.acao, frontendOrigin);
+
         assert.equal(afterDropState.alertHidden, false, 'Network error alert must appear when response is lost');
         assert.equal(afterDropState.lockedBannerHidden, false, 'Locked intent banner must be visible');
         assert.equal(afterDropState.nameDisabled, true, 'Form inputs must be locked during retry recovery');
@@ -737,30 +827,102 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
 
         // Verify order was indeed persisted in DB by the first request
         const dbCheck1 = await testDb.query(
-          `SELECT o.order_number, o.total_amount_minor FROM orders o
+          `SELECT o.order_number, o.total_amount_minor, oi.sku FROM orders o
            JOIN leads l ON l.id = o.lead_id AND l.academy_id = o.academy_id
+           JOIN order_items oi ON oi.order_id = o.id AND oi.academy_id = o.academy_id
            WHERE l.email_normalized = $1`,
           [testEmail]
         );
         assert.equal(dbCheck1.rows.length, 1, 'First request persisted exactly 1 order before connection drop');
+        assert.equal(dbCheck1.rows[0].sku, 'endometriosis');
 
-        // 2. Attempt to tamper with DOM fields and SKU before clicking Retry
-        const afterRetryState = await cdp.evaluate(`(async () => {
+        // Step 3 & 4: User CLOSES the modal and REOPENS checkout (first attempting a different SKU 'mujer-informada-4',
+        // then closing and reopening 'endometriosis').
+        // The system MUST preserve the original intent, SKU, data, and idempotency_key, and block incompatible changes!
+        const afterCloseAndReopenDifferentSku = await cdp.evaluate(`(() => {
+          window.NovarumCheckout.closeCheckout();
+          const backdropHiddenAfterClose = document.getElementById('checkout-modal-backdrop').hidden;
+
+          // Attempt to open checkout for a DIFFERENT SKU ('mujer-informada-4') via catalog button
+          const packBtn = document.querySelector('[data-action="open-checkout"][data-sku="mujer-informada-4"]');
+          packBtn.click();
+
+          return {
+            backdropHiddenAfterClose,
+            backdropHiddenAfterReopen: document.getElementById('checkout-modal-backdrop').hidden,
+            keyAfterReopenDiffSku: window.NovarumCheckout.getIdempotencyKey(),
+            snapshotAfterReopenDiffSku: window.NovarumCheckout.getIntentSnapshot(),
+            displayedTitle: document.getElementById('checkout-product-title').textContent,
+            displayedSkuText: document.getElementById('checkout-product-sku').textContent,
+            selectValue: document.getElementById('checkout-sku-select').value,
+            selectDisabled: document.getElementById('checkout-sku-select').disabled,
+            nameValue: document.getElementById('checkout-name').value,
+            emailValue: document.getElementById('checkout-email').value,
+            phoneValue: document.getElementById('checkout-phone').value,
+            nameDisabled: document.getElementById('checkout-name').disabled,
+            emailDisabled: document.getElementById('checkout-email').disabled,
+            lockedBannerHidden: document.getElementById('checkout-intent-locked-banner').hidden,
+            lockedBannerText: document.getElementById('checkout-intent-locked-banner').textContent,
+            alertHidden: document.getElementById('checkout-error-alert').hidden,
+            alertMessage: document.getElementById('alert-message').textContent,
+            retryBtnHidden: document.getElementById('btn-retry-checkout').hidden,
+            newIntentBtnHidden: document.getElementById('btn-new-intent').hidden,
+          };
+        })()`);
+
+        assert.equal(afterCloseAndReopenDifferentSku.backdropHiddenAfterClose, true, 'Modal must close');
+        assert.equal(afterCloseAndReopenDifferentSku.backdropHiddenAfterReopen, false, 'Modal must reopen');
+        assert.equal(
+          afterCloseAndReopenDifferentSku.keyAfterReopenDiffSku,
+          afterDropState.initialKey,
+          'Closing and reopening modal MUST NOT regenerate idempotency_key'
+        );
+        assert.deepEqual(
+          afterCloseAndReopenDifferentSku.snapshotAfterReopenDiffSku,
+          afterDropState.snapshot,
+          'Closing and reopening modal MUST preserve the exact frozen snapshot'
+        );
+        assert.equal(
+          afterCloseAndReopenDifferentSku.displayedTitle,
+          'Curso: Endometriosis (Del Dolor a la Comprensión)',
+          'Pending intent SKU (endometriosis) must NOT be overwritten when clicking another SKU button'
+        );
+        assert.equal(afterCloseAndReopenDifferentSku.displayedSkuText, 'SKU: endometriosis');
+        assert.equal(afterCloseAndReopenDifferentSku.selectValue, 'endometriosis');
+        assert.equal(afterCloseAndReopenDifferentSku.selectDisabled, true);
+        assert.equal(afterCloseAndReopenDifferentSku.nameValue, 'Valeria Mendoza');
+        assert.equal(afterCloseAndReopenDifferentSku.emailValue, testEmail);
+        assert.equal(afterCloseAndReopenDifferentSku.phoneValue, '+59170099887');
+        assert.equal(afterCloseAndReopenDifferentSku.nameDisabled, true);
+        assert.equal(afterCloseAndReopenDifferentSku.emailDisabled, true);
+        assert.equal(afterCloseAndReopenDifferentSku.lockedBannerHidden, false);
+        assert.match(afterCloseAndReopenDifferentSku.lockedBannerText, /segundo pedido|duplicados/i);
+        assert.equal(afterCloseAndReopenDifferentSku.alertHidden, false);
+        assert.equal(afterCloseAndReopenDifferentSku.retryBtnHidden, false);
+        assert.equal(afterCloseAndReopenDifferentSku.newIntentBtnHidden, false);
+
+        // Close again and reopen for 'endometriosis', attempt DOM tampering & setProduct, then Step 5 & 6: Retry with same key!
+        const afterCloseReopenAndRetry = await cdp.evaluate(`(async () => {
+          window.NovarumCheckout.closeCheckout();
+          window.NovarumCheckout.openCheckout('endometriosis');
+
+          const keyBeforeRetry = window.NovarumCheckout.getIdempotencyKey();
+
           // Attempt to mutate DOM values and SKU while intent is locked
           document.getElementById('checkout-name').value = 'Nombre Modificado';
           document.getElementById('checkout-email').value = 'otro.correo@ejemplo.com';
           document.getElementById('checkout-sku-select').value = 'mujer-informada-4';
           const setProductAllowed = window.NovarumCheckout.setProduct('mujer-informada-4');
 
-          // Click Retry button
+          // Click Retry button (Step 5)
           document.getElementById('btn-retry-checkout').click();
-          // Wait for retry fetch to complete
           for (let i = 0; i < 30; i++) {
             if (!document.getElementById('checkout-confirmation-container').hidden) break;
             await new Promise((r) => setTimeout(r, 30));
           }
 
           return {
+            keyBeforeRetry,
             setProductAllowed,
             confirmationHidden: document.getElementById('checkout-confirmation-container').hidden,
             confirmedOrderNumber: document.getElementById('confirmed-order-number').textContent,
@@ -769,26 +931,33 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
           };
         })()`);
 
-        assert.equal(afterRetryState.setProductAllowed, false, 'setProduct must reject SKU changes while intent is frozen');
-        assert.equal(afterRetryState.confirmationHidden, false, 'Retry must recover the persisted order and show confirmation');
-        assert.equal(afterRetryState.confirmedOrderNumber, dbCheck1.rows[0].order_number, 'Must display exact persisted order number');
-        assert.equal(afterRetryState.confirmedProductTitle, 'Curso: Endometriosis (Del Dolor a la Comprensión)');
-        assert.equal(afterRetryState.confirmedTotalAmount, 'Bs 79.00 BOB');
+        assert.equal(afterCloseReopenAndRetry.keyBeforeRetry, afterDropState.initialKey, 'Key must still equal initialKey before retry');
+        assert.equal(afterCloseReopenAndRetry.setProductAllowed, false, 'setProduct must reject SKU changes while intent is frozen');
+        assert.equal(afterCloseReopenAndRetry.confirmationHidden, false, 'Retry must recover the persisted order and show confirmation');
+        assert.equal(afterCloseReopenAndRetry.confirmedOrderNumber, dbCheck1.rows[0].order_number, 'Must display exact persisted order number');
+        assert.equal(afterCloseReopenAndRetry.confirmedProductTitle, 'Curso: Endometriosis (Del Dolor a la Comprensión)');
+        assert.equal(afterCloseReopenAndRetry.confirmedTotalAmount, 'Bs 79.00 BOB');
 
-        // Verify DB still has strictly 1 order (never created a 2nd order!)
+        // Step 6 Acceptance Criterion: Strictly 1 order persisted in DB with coherent identity and data
         const dbCheck2 = await testDb.query(
-          `SELECT COUNT(*)::int AS cnt FROM orders o
+          `SELECT o.order_number, o.total_amount_minor, l.name, l.email_normalized, oi.sku
+           FROM orders o
            JOIN leads l ON l.id = o.lead_id AND l.academy_id = o.academy_id
+           JOIN order_items oi ON oi.order_id = o.id AND oi.academy_id = o.academy_id
            WHERE l.email_normalized = $1`,
           [testEmail]
         );
-        assert.equal(dbCheck2.rows[0].cnt, 1, 'Database must contain strictly 1 order after retry');
+        assert.equal(dbCheck2.rows.length, 1, 'Database must contain strictly 1 order after close, reopen, and retry');
+        assert.equal(dbCheck2.rows[0].order_number, dbCheck1.rows[0].order_number);
+        assert.equal(dbCheck2.rows[0].name, 'Valeria Mendoza');
+        assert.equal(dbCheck2.rows[0].sku, 'endometriosis');
+        assert.equal(dbCheck2.rows[0].total_amount_minor, 7900);
       });
 
       // -----------------------------------------------------------------------
-      // E2E 6.4: HTTP 409 Conflict Does NOT Auto-Regenerate Key; Explicit Action Required (P1 #1)
+      // E2E 6.4: HTTP 409 Conflict Preserves Key Across Close/Reopen; Explicit Action Required (P1 #1)
       // -----------------------------------------------------------------------
-      await subT.test('6.4 Browser HTTP 409 Handling: preserves idempotency key on 409 until explicit new intent action', async () => {
+      await subT.test('6.4 Browser HTTP 409 Handling: preserves idempotency key on 409 (including close/reopen) until explicit new intent action', async () => {
         // First create an order on the backend with a known UUID
         const conflictingKey = crypto.randomUUID();
         await app.inject({
@@ -813,8 +982,13 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
 
           await window.NovarumCheckout.submitCheckout();
 
+          // Close and reopen modal after 409 to verify 409 state & key are also preserved across close/reopen
+          window.NovarumCheckout.closeCheckout();
+          window.NovarumCheckout.openCheckout('mujer-informada-4');
+
           return {
-            keyAfter409: window.NovarumCheckout.getIdempotencyKey(),
+            keyAfter409AndReopen: window.NovarumCheckout.getIdempotencyKey(),
+            skuAfter409AndReopen: window.NovarumCheckout.getIntentSnapshot().sku,
             alertHidden: document.getElementById('checkout-error-alert').hidden,
             alertTitle: document.getElementById('alert-title').textContent,
             retryHidden: document.getElementById('btn-retry-checkout').hidden,
@@ -823,18 +997,19 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         })()`);
 
         assert.equal(
-          conflictState.keyAfter409,
+          conflictState.keyAfter409AndReopen,
           conflictingKey,
-          'Idempotency key MUST NOT be auto-regenerated on HTTP 409'
+          'Idempotency key MUST NOT be auto-regenerated on HTTP 409 or subsequent modal reopen'
         );
+        assert.equal(conflictState.skuAfter409AndReopen, 'vaginosis', 'Pending 409 intent SKU must remain locked');
         assert.equal(conflictState.alertHidden, false);
         assert.match(conflictState.alertTitle, /409/);
         assert.equal(conflictState.retryHidden, true, 'Retry button is hidden on 409 payload mismatch');
         assert.equal(conflictState.newIntentHidden, false, 'Explicit New Intent button must be shown on 409');
 
-        // Now user explicitly clicks #btn-new-intent
+        // Now user explicitly clicks #btn-new-intent (switches to requested SKU or resets intent with new UUID)
         const explicitResolutionState = await cdp.evaluate(`(async () => {
-          document.getElementById('btn-new-intent').click();
+          window.NovarumCheckout.startNewIntent('vaginosis');
           const newKey = window.NovarumCheckout.getIdempotencyKey();
           const snapshotAfterReset = window.NovarumCheckout.getIntentSnapshot();
           const nameDisabledAfterReset = document.getElementById('checkout-name').disabled;
@@ -850,7 +1025,7 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
           };
         })()`);
 
-        assert.notEqual(explicitResolutionState.newKey, conflictingKey, 'Explicit click on New Intent must generate a new UUID');
+        assert.notEqual(explicitResolutionState.newKey, conflictingKey, 'Explicit New Intent must generate a new UUID');
         assert.equal(explicitResolutionState.snapshotAfterReset, null);
         assert.equal(explicitResolutionState.nameDisabledAfterReset, false);
         assert.equal(explicitResolutionState.confirmationHidden, false, 'New intent submission must succeed');
@@ -898,7 +1073,8 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         );
         assert.equal(raceResult.confirmedTotalAmount, 'Bs 79.00 BOB', 'Amount must strictly match SOP Bs 79.00');
 
-        // Now test late response discard when modal is closed and reopened for another product
+        // Now test closing modal while in-flight -> reopening preserves 'aprende-mujer' intent ->
+        // then explicit #btn-new-intent switches to 'mujer-informada-4' while discarding late response from 'aprende-mujer'
         delayCheckoutMs = 180;
         const staleDiscardResult = await cdp.evaluate(`(async () => {
           window.NovarumCheckout.openCheckout('aprende-mujer');
@@ -906,17 +1082,30 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
           document.getElementById('checkout-email').value = 'carla.tardia@ejemplo.com';
           document.getElementById('consent-terms').checked = true;
 
+          const slowIntentKey = window.NovarumCheckout.getIdempotencyKey();
           const slowPromise = window.NovarumCheckout.submitCheckout();
           await new Promise((r) => setTimeout(r, 40));
 
-          // User closes modal and opens Pack before slow request finishes
+          // User closes modal while request is in-flight and clicks Pack button
           window.NovarumCheckout.closeCheckout();
           window.NovarumCheckout.openCheckout('mujer-informada-4');
+
+          // Because intent was already submitted, openCheckout MUST preserve 'aprende-mujer' and slowIntentKey!
+          const preservedSkuOnReopen = window.NovarumCheckout.getIntentSnapshot().sku;
+          const preservedKeyOnReopen = window.NovarumCheckout.getIdempotencyKey();
+
+          // Now user explicitly clicks #btn-new-intent to discard the old intent and switch to 'mujer-informada-4'
+          document.getElementById('btn-new-intent').click();
+          const newKeyAfterExplicitReset = window.NovarumCheckout.getIdempotencyKey();
 
           await slowPromise;
           await new Promise((r) => setTimeout(r, 200));
 
           return {
+            slowIntentKey,
+            preservedSkuOnReopen,
+            preservedKeyOnReopen,
+            newKeyAfterExplicitReset,
             formHidden: document.getElementById('checkout-form-container').hidden,
             confirmationHidden: document.getElementById('checkout-confirmation-container').hidden,
             currentProductTitle: document.getElementById('checkout-product-title').textContent,
@@ -924,24 +1113,94 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         })()`);
         delayCheckoutMs = 0;
 
+        assert.equal(staleDiscardResult.preservedSkuOnReopen, 'aprende-mujer', 'Reopening after in-flight close must preserve submitted SKU');
+        assert.equal(staleDiscardResult.preservedKeyOnReopen, staleDiscardResult.slowIntentKey, 'Reopening after in-flight close must preserve idempotency key');
+        assert.notEqual(staleDiscardResult.newKeyAfterExplicitReset, staleDiscardResult.slowIntentKey, 'Explicit click on #btn-new-intent must generate a new key');
         assert.equal(staleDiscardResult.formHidden, false, 'New modal session must stay on form view');
         assert.equal(staleDiscardResult.confirmationHidden, true, 'Late response from previous attempt must be discarded');
         assert.equal(staleDiscardResult.currentProductTitle, 'Pack Completo: Mujer Informada (4 Cursos)');
       });
 
       // -----------------------------------------------------------------------
-      // E2E 6.6: Strict 200/201 Response Validation & Safe Status Rendering (P2 #5 & #7)
+      // E2E 6.6: Strict 200/201 Response Validation & Exact 64-Hex Opaque Token Contract (P2 #3, #5 & #7)
       // -----------------------------------------------------------------------
-      await subT.test('6.6 Browser Strict Response Validation: rejects HTTP 200 {} and XSS status strings', async () => {
-        // Inject an empty 200 {} response from server
-        overrideCheckoutResponse = { statusCode: 200, body: {} };
+      await subT.test('6.6 Browser Strict Response & 64-Hex Token Validation: tests 32, 63, 64, 65 chars, non-hex, missing, HTTP 200 {} & XSS status', async () => {
+        // 1. Direct contract matrix verification of validateOrderResponse() for opaque_token lengths & characters
+        const tokenValidationMatrix = await cdp.evaluate(`(() => {
+          const snap = { sku: 'sop' };
+          const makeOrder = (token) => ({
+            order_number: 'DPS-20261104-1001',
+            opaque_token: token,
+            total_amount_minor: 7900,
+            currency: 'BOB',
+            status: 'pending_payment',
+            sku: 'sop',
+          });
 
-        const malformedResult = await cdp.evaluate(`(async () => {
+          return {
+            len32: window.NovarumCheckout.validateOrderResponse(makeOrder('a'.repeat(32)), snap).valid,
+            len63: window.NovarumCheckout.validateOrderResponse(makeOrder('b'.repeat(63)), snap).valid,
+            len64Lower: window.NovarumCheckout.validateOrderResponse(makeOrder('c'.repeat(64)), snap).valid,
+            len64Mixed: window.NovarumCheckout.validateOrderResponse(
+              makeOrder('0123456789abcdefABCDEF0123456789abcdefABCDEF0123456789abcdefABCD'),
+              snap
+            ).valid,
+            len65: window.NovarumCheckout.validateOrderResponse(makeOrder('d'.repeat(65)), snap).valid,
+            invalidHexG: window.NovarumCheckout.validateOrderResponse(makeOrder('g'.repeat(64)), snap).valid,
+            invalidHexSymbol: window.NovarumCheckout.validateOrderResponse(makeOrder('a'.repeat(63) + '!'), snap).valid,
+            missingUndefined: window.NovarumCheckout.validateOrderResponse(makeOrder(undefined), snap).valid,
+            missingNull: window.NovarumCheckout.validateOrderResponse(makeOrder(null), snap).valid,
+            missingEmpty: window.NovarumCheckout.validateOrderResponse(makeOrder(''), snap).valid,
+          };
+        })()`);
+
+        assert.equal(tokenValidationMatrix.len32, false, '32-char hex token must be rejected');
+        assert.equal(tokenValidationMatrix.len63, false, '63-char hex token must be rejected');
+        assert.equal(tokenValidationMatrix.len64Lower, true, '64-char lowercase hex token must be accepted');
+        assert.equal(tokenValidationMatrix.len64Mixed, true, '64-char mixed-case hex token must be accepted');
+        assert.equal(tokenValidationMatrix.len65, false, '65-char hex token must be rejected');
+        assert.equal(tokenValidationMatrix.invalidHexG, false, '64-char non-hex string (g) must be rejected');
+        assert.equal(tokenValidationMatrix.invalidHexSymbol, false, '64-char string with punctuation must be rejected');
+        assert.equal(tokenValidationMatrix.missingUndefined, false, 'Undefined token must be rejected');
+        assert.equal(tokenValidationMatrix.missingNull, false, 'Null token must be rejected');
+        assert.equal(tokenValidationMatrix.missingEmpty, false, 'Empty string token must be rejected');
+
+        // 2. End-to-end check: server returns HTTP 200 with a 32-char token -> UI rejects it and keeps confirmation hidden
+        overrideCheckoutResponse = {
+          statusCode: 200,
+          body: {
+            order_number: 'DPS-20261104-1055',
+            opaque_token: 'a'.repeat(32),
+            total_amount_minor: 7900,
+            currency: 'BOB',
+            status: 'pending_payment',
+            sku: 'sop',
+          },
+        };
+
+        const shortTokenE2EResult = await cdp.evaluate(`(async () => {
           window.NovarumCheckout.openCheckout('sop');
           document.getElementById('checkout-name').value = 'Laura Valida';
           document.getElementById('checkout-email').value = 'laura.valida@ejemplo.com';
           document.getElementById('consent-terms').checked = true;
 
+          await window.NovarumCheckout.submitCheckout();
+
+          return {
+            confirmationHidden: document.getElementById('checkout-confirmation-container').hidden,
+            alertHidden: document.getElementById('checkout-error-alert').hidden,
+            alertMessage: document.getElementById('alert-message').textContent,
+          };
+        })()`);
+
+        assert.equal(shortTokenE2EResult.confirmationHidden, true, 'Confirmation must be blocked for 32-char opaque_token');
+        assert.equal(shortTokenE2EResult.alertHidden, false);
+        assert.match(shortTokenE2EResult.alertMessage, /64 caracteres hexadecimales/);
+
+        // 3. Inject an empty 200 {} response on retry -> still blocked
+        overrideCheckoutResponse = { statusCode: 200, body: {} };
+
+        const malformedResult = await cdp.evaluate(`(async () => {
           await window.NovarumCheckout.submitCheckout();
 
           return {
@@ -958,7 +1217,7 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         assert.ok(!malformedResult.modalText.includes('DPS-XXXXX'), 'Must never render DPS-XXXXX');
         assert.ok(!malformedResult.modalText.includes('NaN'), 'Must never render NaN');
 
-        // Now complete the order with a valid response (clicking Retry uses the same frozen intent!)
+        // 4. Now complete the order with a valid backend response (clicking Retry uses the same frozen intent!)
         const recoveredValid = await cdp.evaluate(`(async () => {
           await window.NovarumCheckout.submitCheckout();
           return {
@@ -972,7 +1231,7 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         assert.equal(recoveredValid.paymentBtnDisabled, true, 'Payment coordination button must remain disabled in staging');
         assert.equal(recoveredValid.paymentBtnAriaDisabled, 'true');
 
-        // Test checkOrderStatus with an unapproved / XSS status string -> must reject and never inject HTML
+        // 5. Test checkOrderStatus with an unapproved / XSS status string -> must reject and never inject HTML
         overrideStatusResponse = {
           statusCode: 200,
           body: {
@@ -995,7 +1254,7 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         assert.equal(xssStatusCheck.xssElementExists, false, 'Must never parse status via innerHTML');
         assert.match(xssStatusCheck.feedbackClass, /status-error/, 'Unapproved status must be rejected as error');
 
-        // Now test checkOrderStatus with real backend status endpoint
+        // 6. Now test checkOrderStatus with real backend status endpoint
         const validStatusCheck = await cdp.evaluate(`(async () => {
           await window.NovarumCheckout.checkOrderStatus();
           return {
@@ -1045,10 +1304,12 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
       try {
         chromeProc.kill('SIGKILL');
       } catch (_) {}
-      if (typeof server.closeAllConnections === 'function') {
-        server.closeAllConnections();
+      for (const srv of [apiServer, frontendServer, untrustedFrontendServer]) {
+        if (typeof srv.closeAllConnections === 'function') {
+          srv.closeAllConnections();
+        }
+        await new Promise((resolve) => srv.close(resolve));
       }
-      await new Promise((resolve) => server.close(resolve));
       try {
         fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       } catch (_) {}

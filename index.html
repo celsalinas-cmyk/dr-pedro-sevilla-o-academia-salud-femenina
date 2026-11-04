@@ -633,7 +633,7 @@
                 <!-- Aviso de Intención Congelada (Protección Idempotente) -->
                 <div id="checkout-intent-locked-banner" class="checkout-intent-locked" role="status" aria-live="polite" hidden>
                     <span class="intent-locked-text">
-                        🔒 <strong>Intención de compra protegida:</strong> Los datos del intento actual están congelados para evitar cargos o pedidos duplicados al reintentar.
+                        🔒 <strong>Intención de compra protegida:</strong> Ya enviaste una solicitud que podría haber generado un pedido en el servidor. Tus datos, SKU y clave siguen congelados para evitar duplicados (iniciar otra intención sin verificar podría crear un segundo pedido).
                     </span>
                     <button type="button" id="btn-reset-intent" class="btn-link-reset">Iniciar nueva intención de compra</button>
                 </div>
@@ -803,9 +803,14 @@
     </div>
 
     <!-- Configuración Explícita de Entorno para el Motor Comercial (Gate 2-A2) -->
+    <!-- Sin endpoint ficticio predeterminado: si el entorno de ejecución no inyecta un origen
+         operativo en window.NOVARUM_API_BASE (o meta[name="novarum-api-base"]), el checkout
+         permanece bloqueado de forma segura y comprensible. -->
     <script id="novarum-runtime-config">
+        window.NOVARUM_RUNTIME_ENV = window.NOVARUM_RUNTIME_ENV || 'staging';
         if (typeof window.NOVARUM_API_BASE === 'undefined') {
-            window.NOVARUM_API_BASE = 'https://api.academia.drpedrosevilla.com';
+            const metaApiBase = document.querySelector('meta[name="novarum-api-base"]');
+            window.NOVARUM_API_BASE = metaApiBase ? (metaApiBase.getAttribute('content') || '').trim() : '';
         }
         if (typeof window.NOVARUM_ENABLE_PAYMENT_COORDINATION === 'undefined') {
             window.NOVARUM_ENABLE_PAYMENT_COORDINATION = false;

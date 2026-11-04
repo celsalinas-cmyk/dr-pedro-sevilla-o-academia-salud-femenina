@@ -85,12 +85,15 @@
   // 3. Internal State
   let currentSku = 'mujer-informada-4';
   let currentIdempotencyKey = null;
-  let currentIntentSnapshot = null; // Frozen payload bound to currentIdempotencyKey
+  let currentIntentSnapshot = null; // Frozen payload bound to currentIdempotencyKey while pending resolution
   let currentOpaqueToken = null;
   let isSubmitting = false;
   let activeRequestId = 0;
   let activeAbortController = null;
   let lastTriggerElement = null;
+  let lastPendingAlert = null;
+  let pendingRequestedSku = null;
+  let hasCompletedOrder = false;
 
   // 4. Explicit & Validated API Base Resolution (No empty/relative fallback)
   function resolveValidApiBase() {
@@ -379,11 +382,23 @@
     setSubmittingState(false);
     currentIntentSnapshot = null;
     currentOpaqueToken = null;
+    lastPendingAlert = null;
     currentIdempotencyKey = generateUUID();
 
-    if (optionalSku && PRODUCTS[optionalSku]) {
-      currentSku = optionalSku;
+    const nextSku =
+      optionalSku && PRODUCTS[optionalSku]
+        ? optionalSku
+        : pendingRequestedSku && PRODUCTS[pendingRequestedSku]
+          ? pendingRequestedSku
+          : currentSku;
+    pendingRequestedSku = null;
+    currentSku = nextSku;
+
+    if (hasCompletedOrder && form) {
+      form.reset();
+      hasCompletedOrder = false;
     }
+
     renderProductHeader(currentSku);
     syncFormLockState();
     clearAlert();
@@ -434,8 +449,22 @@
           ? document.activeElement
           : null;
 
-    // Starting modal opens a clean purchase intent for the requested SKU
-    startNewIntent(sku || currentSku);
+    // P1: Preserve unresolved submitted intent across modal close & reopen.
+    // Never overwrite a pending submitted intent or regenerate its idempotency_key automatically.
+    if (currentIntentSnapshot !== null) {
+      currentIdempotencyKey = currentIntentSnapshot.idempotency_key;
+      restoreFormFromSnapshot(currentIntentSnapshot);
+      syncFormLockState();
+      clearErrors();
+
+      if (sku && PRODUCTS[sku] && sku !== currentIntentSnapshot.sku) {
+        pendingRequestedSku = sku;
+      } else {
+        pendingRequestedSku = null;
+      }
+    } else {
+      startNewIntent(sku || currentSku);
+    }
 
     if (formContainer) formContainer.hidden = false;
     if (confirmationContainer) confirmationContainer.hidden = true;
@@ -462,13 +491,45 @@
         false
       );
       if (submitBtn) submitBtn.disabled = true;
-    } else if (submitBtn) {
-      submitBtn.disabled = false;
+    } else {
+      if (submitBtn) submitBtn.disabled = false;
+
+      if (currentIntentSnapshot !== null) {
+        if (lastPendingAlert && lastPendingAlert.type === 'conflict_409') {
+          showAlert(lastPendingAlert.title, lastPendingAlert.message, false, true);
+        } else if (pendingRequestedSku && pendingRequestedSku !== currentIntentSnapshot.sku) {
+          const lockedProd = PRODUCTS[currentIntentSnapshot.sku];
+          showAlert(
+            'Intención de compra pendiente de resolución',
+            `Ya enviaste una solicitud para "${lockedProd.title}" (SKU: ${currentIntentSnapshot.sku}) cuya respuesta no fue confirmada. Para evitar un segundo pedido accidental, no se puede cambiar de producto ni modificar los datos. Haz clic en "Reintentar" para recuperar tu pedido con la misma clave, o en "Nueva intención" bajo advertencia de posible pedido existente.`,
+            true,
+            true
+          );
+        } else if (lastPendingAlert) {
+          showAlert(
+            lastPendingAlert.title,
+            lastPendingAlert.message,
+            lastPendingAlert.showRetry,
+            lastPendingAlert.showNewIntent
+          );
+        } else {
+          showAlert(
+            'Intención de compra protegida',
+            'Tu solicitud previa sigue pendiente de confirmación. Tus datos, SKU y clave de idempotencia se han conservado para evitar pedidos duplicados. Haz clic en "Reintentar" para recuperar tu pedido o en "Nueva intención" bajo advertencia de posible pedido existente.',
+            true,
+            true
+          );
+        }
+      }
     }
 
     setTimeout(() => {
       if (nameInput && !nameInput.disabled) {
         nameInput.focus();
+      } else if (retryBtn && !retryBtn.hidden && !retryBtn.disabled) {
+        retryBtn.focus();
+      } else if (newIntentBtn && !newIntentBtn.hidden && !newIntentBtn.disabled) {
+        newIntentBtn.focus();
       } else if (closeBtn) {
         closeBtn.focus();
       }
@@ -477,8 +538,20 @@
 
   function closeCheckout() {
     if (!backdrop) return;
+    const wasSubmitting = isSubmitting;
     cancelInFlightRequest();
     setSubmittingState(false);
+
+    if (wasSubmitting && currentIntentSnapshot !== null && !lastPendingAlert) {
+      lastPendingAlert = {
+        type: 'interrupted',
+        title: 'Intención de compra pendiente de confirmación',
+        message:
+          'Cerraste la ventana mientras tu solicitud estaba enviándose. Es posible que tu pedido ya haya sido registrado en el servidor. Tus datos y tu clave de idempotencia siguen congelados: haz clic en "Reintentar" para recuperar tu pedido sin duplicarlo, o en "Nueva intención" bajo advertencia de posible pedido existente.',
+        showRetry: true,
+        showNewIntent: true,
+      };
+    }
 
     backdrop.hidden = true;
     setBackgroundInert(false);
@@ -594,8 +667,11 @@
       return { valid: false, reason: 'El número de pedido devuelto por el servidor es inválido o está ausente.' };
     }
 
-    if (typeof orderData.opaque_token !== 'string' || !/^[a-f0-9]{32,128}$/i.test(orderData.opaque_token.trim())) {
-      return { valid: false, reason: 'El token seguro de consulta devuelto por el servidor es inválido.' };
+    if (typeof orderData.opaque_token !== 'string' || !/^[a-f0-9]{64}$/i.test(orderData.opaque_token.trim())) {
+      return {
+        valid: false,
+        reason: 'El token seguro de consulta devuelto por el servidor debe tener exactamente 64 caracteres hexadecimales.',
+      };
     }
 
     if (
@@ -671,7 +747,8 @@
 
       currentIntentSnapshot = Object.freeze(rawPayload);
     } else {
-      // Ensure UI reflects the frozen snapshot even if DOM was tampered with before retry
+      // Ensure UI and key reflect the frozen snapshot even if DOM was tampered with or modal was reopened
+      currentIdempotencyKey = currentIntentSnapshot.idempotency_key;
       restoreFormFromSnapshot(currentIntentSnapshot);
     }
 
@@ -716,27 +793,55 @@
         syncFormLockState();
 
         if (response.status === 429) {
+          lastPendingAlert = {
+            type: 'rate_limit',
+            title: 'Límite de solicitudes',
+            message:
+              'Demasiados intentos en poco tiempo. Tu intención de compra sigue protegida; espera unos momentos y vuelve a intentarlo.',
+            showRetry: true,
+            showNewIntent: true,
+          };
           showAlert(
-            'Límite de solicitudes',
-            'Demasiados intentos en poco tiempo. Tu intención de compra sigue protegida; espera unos momentos y vuelve a intentarlo.',
-            true,
-            true
+            lastPendingAlert.title,
+            lastPendingAlert.message,
+            lastPendingAlert.showRetry,
+            lastPendingAlert.showNewIntent
           );
         } else if (response.status === 409) {
           // NEVER auto-regenerate idempotency_key on HTTP 409!
-          // Require explicit user decision to either retry same snapshot or start a new intent.
+          // Require explicit user decision to start a new intent.
+          lastPendingAlert = {
+            type: 'conflict_409',
+            title: 'Conflicto de intención de compra (HTTP 409)',
+            message:
+              'La clave de idempotencia actual ya fue registrada con datos distintos. Para evitar pedidos duplicados, la clave NO se regenera automáticamente. Haz clic en "Nueva intención" si deseas iniciar un pedido nuevo (advertencia: verifica antes si ya tienes un pedido registrado).',
+            showRetry: false,
+            showNewIntent: true,
+          };
           showAlert(
-            'Conflicto de intención de compra (HTTP 409)',
-            'La clave de idempotencia actual ya fue registrada con datos distintos. Para evitar pedidos duplicados, la clave NO se regenera automáticamente. Haz clic en "Nueva intención" si deseas iniciar un pedido nuevo.',
-            false,
-            true
+            lastPendingAlert.title,
+            lastPendingAlert.message,
+            lastPendingAlert.showRetry,
+            lastPendingAlert.showNewIntent
           );
         } else {
           const errMsg =
             data && typeof data.message === 'string' && data.message.trim().length > 0
               ? data.message
               : 'No fue posible registrar el pedido en este momento.';
-          showAlert('Error en el registro', errMsg, true, true);
+          lastPendingAlert = {
+            type: 'http_error',
+            title: 'Error en el registro',
+            message: errMsg,
+            showRetry: true,
+            showNewIntent: true,
+          };
+          showAlert(
+            lastPendingAlert.title,
+            lastPendingAlert.message,
+            lastPendingAlert.showRetry,
+            lastPendingAlert.showNewIntent
+          );
         }
         return;
       }
@@ -746,11 +851,18 @@
       if (!validation.valid) {
         setSubmittingState(false, submittedSnapshot.sku);
         syncFormLockState();
+        lastPendingAlert = {
+          type: 'invalid_response',
+          title: 'Respuesta inválida del servidor',
+          message: `${validation.reason} Puedes reintentar de forma segura con la misma clave protegida.`,
+          showRetry: true,
+          showNewIntent: true,
+        };
         showAlert(
-          'Respuesta inválida del servidor',
-          `${validation.reason} Puedes reintentar de forma segura con la misma clave protegida.`,
-          true,
-          true
+          lastPendingAlert.title,
+          lastPendingAlert.message,
+          lastPendingAlert.showRetry,
+          lastPendingAlert.showNewIntent
         );
         return;
       }
@@ -762,11 +874,19 @@
       }
       setSubmittingState(false, submittedSnapshot.sku);
       syncFormLockState();
+      lastPendingAlert = {
+        type: 'network',
+        title: 'Sin conexión al servidor',
+        message:
+          'No pudimos recibir la confirmación del servidor comercial. Es posible que tu pedido ya haya sido registrado. Tus datos y tu clave de idempotencia están congelados para evitar duplicados: haz clic en "Reintentar" para recuperar tu pedido o en "Nueva intención" bajo advertencia de posible pedido existente.',
+        showRetry: true,
+        showNewIntent: true,
+      };
       showAlert(
-        'Sin conexión al servidor',
-        'No pudimos recibir la confirmación del servidor comercial. Tus datos y tu clave de idempotencia están congelados para evitar duplicados. Haz clic en "Reintentar" para recuperar tu pedido o en "Nueva intención" para empezar de cero.',
-        true,
-        true
+        lastPendingAlert.title,
+        lastPendingAlert.message,
+        lastPendingAlert.showRetry,
+        lastPendingAlert.showNewIntent
       );
     }
   }
@@ -801,6 +921,14 @@
   function handleCheckoutSuccess(orderData, submittedSnapshot) {
     setSubmittingState(false, submittedSnapshot.sku);
     currentOpaqueToken = orderData.opaque_token.trim();
+
+    // Intent is now resolved and confirmed; clear pending unresolved state
+    currentIntentSnapshot = null;
+    currentIdempotencyKey = null;
+    lastPendingAlert = null;
+    pendingRequestedSku = null;
+    hasCompletedOrder = true;
+    syncFormLockState();
 
     if (formContainer) formContainer.hidden = true;
     if (confirmationContainer) confirmationContainer.hidden = false;
@@ -842,7 +970,14 @@
 
   // 17. Real-Time Order Status Check via Opaque Token (Zero PII & Safe DOM Text)
   async function checkOrderStatus() {
-    if (!currentOpaqueToken || !statusLookupFeedback) return;
+    if (
+      !currentOpaqueToken ||
+      typeof currentOpaqueToken !== 'string' ||
+      !/^[a-f0-9]{64}$/i.test(currentOpaqueToken.trim()) ||
+      !statusLookupFeedback
+    ) {
+      return;
+    }
 
     const apiBase = resolveValidApiBase();
     if (!apiBase) {
@@ -982,13 +1117,13 @@
     // Explicit New Intent Buttons
     if (newIntentBtn) {
       newIntentBtn.addEventListener('click', () => {
-        startNewIntent(currentSku);
+        startNewIntent();
         if (nameInput) nameInput.focus();
       });
     }
     if (resetIntentBtn) {
       resetIntentBtn.addEventListener('click', () => {
-        startNewIntent(currentSku);
+        startNewIntent();
         if (nameInput) nameInput.focus();
       });
     }
