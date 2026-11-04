@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
+import net from 'net';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -13,6 +14,17 @@ import { config } from '../src/config.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, '../../');
+
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close((err) => (err ? reject(err) : resolve(port)));
+    });
+    srv.on('error', reject);
+  });
+}
 
 /**
  * Finds the installed Chrome/Chromium executable across macOS and Linux (Ubuntu CI).
@@ -140,7 +152,20 @@ function connectCdpWebSocket(wsUrl) {
       function send(method, params = {}) {
         const id = nextId++;
         return new Promise((resCmd, rejCmd) => {
-          pending.set(id, { resolve: resCmd, reject: rejCmd });
+          const timer = setTimeout(() => {
+            pending.delete(id);
+            rejCmd(new Error(`CDP command timed out after 15s: ${method}`));
+          }, 15000);
+          pending.set(id, {
+            resolve: (val) => {
+              clearTimeout(timer);
+              resCmd(val);
+            },
+            reject: (err) => {
+              clearTimeout(timer);
+              rejCmd(err);
+            },
+          });
           sendFrame(JSON.stringify({ id, method, params }));
         });
       }
@@ -418,6 +443,8 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
           content = Buffer.from(
             content
               .toString('utf8')
+              .replace(/<link[^>]*fonts\.googleapis\.com[^>]*>/g, '')
+              .replace(/<link[^>]*fonts\.gstatic\.com[^>]*>/g, '')
               .replace('https://api.academia.drpedrosevilla.com', testOrigin),
             'utf8'
           );
@@ -438,46 +465,44 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
       config.allowedOrigins.push(baseUrl);
     }
 
-    // Launch Headless Chrome with remote debugging on an ephemeral port
+    // Launch Headless Chrome with stdio: 'ignore' so Linux crashpad daemons never hold pipes open
+    const debugPort = await getFreePort();
     const userDataDir = fs.mkdtempSync('/tmp/novarum-chrome-e2e-');
     const chromeProc = spawn(
       chromeBin,
       [
         '--headless=new',
         '--no-sandbox',
+        '--disable-setuid-sandbox',
         '--disable-gpu',
         '--disable-dev-shm-usage',
-        '--remote-debugging-port=0',
+        '--disable-crash-reporter',
+        '--disable-breakpad',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-extensions',
+        '--disable-background-networking',
+        `--remote-debugging-port=${debugPort}`,
         `--user-data-dir=${userDataDir}`,
         `${baseUrl}/index.html?utm_source=tiktok&utm_campaign=gate2_e2e`,
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] }
+      { stdio: 'ignore', detached: true }
     );
+    chromeProc.unref();
 
-    let wsEndpoint = null;
-    chromeProc.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
-      const match = text.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-      if (match) {
-        wsEndpoint = match[1];
-      }
-    });
-
-    for (let i = 0; i < 60 && !wsEndpoint; i++) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    assert.ok(wsEndpoint, 'Headless Chrome must expose DevTools WebSocket endpoint');
-
-    const debugUrl = new URL(wsEndpoint);
     let pageWsUrl = null;
-    for (let i = 0; i < 40 && !pageWsUrl; i++) {
-      const listRes = await fetch(`http://127.0.0.1:${debugUrl.port}/json/list`);
-      const targets = await listRes.json();
-      const pageTarget = targets.find((tgt) => tgt.type === 'page' && tgt.url.includes('index.html'));
-      if (pageTarget && pageTarget.webSocketDebuggerUrl) {
-        pageWsUrl = pageTarget.webSocketDebuggerUrl;
-        break;
-      }
+    for (let i = 0; i < 80 && !pageWsUrl; i++) {
+      try {
+        const listRes = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
+        if (listRes.ok) {
+          const targets = await listRes.json();
+          const pageTarget = targets.find((tgt) => tgt.type === 'page' && tgt.url.includes('index.html'));
+          if (pageTarget && pageTarget.webSocketDebuggerUrl) {
+            pageWsUrl = pageTarget.webSocketDebuggerUrl;
+            break;
+          }
+        }
+      } catch (_) {}
       await new Promise((r) => setTimeout(r, 100));
     }
     assert.ok(pageWsUrl, 'Headless Chrome must have an active page target for index.html');
@@ -1014,11 +1039,15 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
       });
     } finally {
       cdp.close();
-      await new Promise((resolve) => {
-        if (chromeProc.exitCode !== null) return resolve();
-        chromeProc.once('exit', resolve);
+      try {
+        process.kill(-chromeProc.pid, 'SIGKILL');
+      } catch (_) {}
+      try {
         chromeProc.kill('SIGKILL');
-      });
+      } catch (_) {}
+      if (typeof server.closeAllConnections === 'function') {
+        server.closeAllConnections();
+      }
       await new Promise((resolve) => server.close(resolve));
       try {
         fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });

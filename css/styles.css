@@ -35,6 +35,12 @@
     box-sizing: border-box;
 }
 
+html,
+body {
+    overflow-x: hidden;
+    max-width: 100%;
+}
+
 body {
     font-family: var(--font-primary);
     background-color: var(--bg-color);
@@ -2763,14 +2769,14 @@ select.form-control {
 /* Responsive Overrides (including 360px mobile viewports) */
 @media (max-width: 640px) {
     .checkout-backdrop {
-        padding: 10px;
+        padding: 8px;
     }
     .checkout-modal {
-        padding: 24px 16px;
+        padding: 22px 14px;
         max-height: 94vh;
     }
     .checkout-title {
-        font-size: 1.35rem;
+        font-size: 1.3rem;
     }
     .checkout-product-summary {
         flex-direction: column;
@@ -2783,6 +2789,12 @@ select.form-control {
     .checkout-intent-locked {
         flex-direction: column;
         align-items: stretch;
+    }
+    .btn-link-reset,
+    .btn-retry,
+    .btn-new-intent {
+        white-space: normal;
+        text-align: center;
     }
     .legal-summary-trigger-row,
     .checkout-legal-summary {
