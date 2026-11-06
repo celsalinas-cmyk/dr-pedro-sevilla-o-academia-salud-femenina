@@ -18,7 +18,7 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
 
     // Ensure pristine test isolation: purge any residual transactional data
     await env.query(`
-      TRUNCATE TABLE order_events, order_items, orders, consents, leads CASCADE;
+      TRUNCATE TABLE payment_reconciliations, admin_sessions, admin_operators, order_events, order_items, orders, consents, leads CASCADE;
     `);
 
     service = new CheckoutService(env, 'dr-sevilla');
@@ -321,5 +321,209 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
       [legacyOrderNumber]
     );
     assert.equal(parseInt(secondCheck.rows[0].count, 10), 1, 'Second migration run must preserve existing orders without errors');
+  });
+
+  await t.test('8. Gate 2-A3-A1 Real PostgreSQL: Concurrent Bank Verification Race Condition & Immutability Triggers', async () => {
+    await app.adminAuthService.bootstrapOperators([
+      {
+        operator_id: 'op_pg_admin',
+        display_name: 'Admin Real PG',
+        role: 'academy_admin',
+        password: 'RealPgAdminPassword#2026!',
+      },
+    ]);
+
+    const adminSession = {
+      academyId: 'dr-sevilla',
+      operatorId: 'op_pg_admin',
+      role: 'academy_admin',
+    };
+
+    // Create two distinct orders on real PostgreSQL
+    const order1Res = await service.processCheckout({
+      sku: 'endometriosis',
+      name: 'Concurrent PG Buyer Uno',
+      email: `pg_conc_1_${Date.now()}@ejemplo.com`,
+      terms_accepted: true,
+      idempotency_key: crypto.randomUUID(),
+    });
+    const order2Res = await service.processCheckout({
+      sku: 'endometriosis',
+      name: 'Concurrent PG Buyer Dos',
+      email: `pg_conc_2_${Date.now()}@ejemplo.com`,
+      terms_accepted: true,
+      idempotency_key: crypto.randomUUID(),
+    });
+
+    const o1Row = (await env.query('SELECT id FROM orders WHERE order_number = $1', [order1Res.order.order_number])).rows[0];
+    const o2Row = (await env.query('SELECT id FROM orders WHERE order_number = $1', [order2Res.order.order_number])).rows[0];
+
+    const contestedBankRef = `BNB-CONC-${Date.now()}`;
+    const baseVerifyPayload = {
+      reconciliation_mode: 'standard_reference',
+      bank_reference: contestedBankRef,
+      reconciliation_evidence: 'Extracto BNB abono concurrente Bs 79.00',
+      recipient_account_id: 'BNB-DR-SEVILLA-BOB-01',
+      recipient_account_verified: true,
+      effective_transaction_verified: true,
+      verified_amount_minor: 7900,
+      verified_currency: 'BOB',
+      bank_credit_at: new Date().toISOString(),
+      reason: 'Verificación concurrente contra PostgreSQL real',
+    };
+
+    // Fire both verifications concurrently for the SAME bank_reference on two different orders
+    const outcomes = await Promise.allSettled([
+      app.adminOperationsService.verifyPayment(adminSession, o1Row.id, {
+        ...baseVerifyPayload,
+        idempotency_key: crypto.randomUUID(),
+      }),
+      app.adminOperationsService.verifyPayment(adminSession, o2Row.id, {
+        ...baseVerifyPayload,
+        idempotency_key: crypto.randomUUID(),
+      }),
+    ]);
+
+    const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');
+    const rejected = outcomes.filter((o) => o.status === 'rejected');
+
+    assert.equal(fulfilled.length, 1, 'Exactly one concurrent verification must succeed');
+    assert.equal(rejected.length, 1, 'Exactly one concurrent verification must be rejected');
+    assert.equal(rejected[0].reason.statusCode, 409);
+    assert.equal(rejected[0].reason.code, 'DUPLICATE_BANK_REFERENCE');
+
+    // Verify in PostgreSQL that only 1 reconciliation row exists for contestedBankRef
+    const recCount = await env.query(
+      'SELECT count(*) FROM payment_reconciliations WHERE bank_reference = $1',
+      [contestedBankRef]
+    );
+    assert.equal(parseInt(recCount.rows[0].count, 10), 1);
+
+    // 8b. Verify PostgreSQL Immutability Triggers (trg_order_events_immutable & trg_payment_reconciliations_no_delete)
+    const eventRow = fulfilled[0].value.event;
+    const recRow = fulfilled[0].value.reconciliation;
+
+    await assert.rejects(
+      async () => {
+        await env.query(`UPDATE order_events SET reason = 'Tampered reason' WHERE id = $1`, [eventRow.id]);
+      },
+      (err) => {
+        assert.equal(err.code, '55000', 'PostgreSQL trigger must reject UPDATE on order_events');
+        assert.ok(err.message.includes('ORDER_EVENTS_IMMUTABLE'));
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      async () => {
+        await env.query(`DELETE FROM order_events WHERE id = $1`, [eventRow.id]);
+      },
+      (err) => {
+        assert.equal(err.code, '55000', 'PostgreSQL trigger must reject DELETE on order_events');
+        assert.ok(err.message.includes('ORDER_EVENTS_IMMUTABLE'));
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      async () => {
+        await env.query(`DELETE FROM payment_reconciliations WHERE id = $1`, [recRow.id]);
+      },
+      (err) => {
+        assert.equal(err.code, '55000', 'PostgreSQL trigger must reject DELETE on payment_reconciliations');
+        assert.ok(err.message.includes('PAYMENT_RECONCILIATIONS_IMMUTABLE'));
+        return true;
+      }
+    );
+
+    // 8c. Verify Admin Service Rollback on Injected Failure before COMMIT
+    const rollbackBankRef = `BNB-ROLLBACK-${Date.now()}`;
+    const loserOrderId = fulfilled[0].value.order.id === o1Row.id ? o2Row.id : o1Row.id;
+
+    await assert.rejects(
+      async () => {
+        await app.adminOperationsService.verifyPayment(
+          adminSession,
+          loserOrderId,
+          {
+            ...baseVerifyPayload,
+            bank_reference: rollbackBankRef,
+            idempotency_key: crypto.randomUUID(),
+          },
+          { injectFailureBeforeCommit: true }
+        );
+      },
+      (err) => {
+        assert.equal(err.message, 'INJECTED_TRANSACTION_FAILURE_BEFORE_COMMIT');
+        return true;
+      }
+    );
+
+    const rollbackRecCheck = await env.query(
+      'SELECT count(*) FROM payment_reconciliations WHERE bank_reference = $1',
+      [rollbackBankRef]
+    );
+    assert.equal(parseInt(rollbackRecCheck.rows[0].count, 10), 0, 'Reconciliation row must be rolled back');
+
+    const loserOrderCheck = await env.query('SELECT status FROM orders WHERE id = $1', [loserOrderId]);
+    assert.equal(loserOrderCheck.rows[0].status, 'pending_payment', 'Order status must remain pending_payment after rollback');
+
+    // 8d. Real PostgreSQL Acceptance Case: Order A -> Reverse (reversed_mistaken_match) -> Order B
+    const winnerOrderId = fulfilled[0].value.order.id;
+    const revRes = await app.adminOperationsService.reverseOrderState(adminSession, winnerOrderId, {
+      target_status: 'pending_payment',
+      corrected_event_id: eventRow.id,
+      reason: 'Reversión administrativa en PostgreSQL real por error de imputación entre pedidos',
+      idempotency_key: crypto.randomUUID(),
+    });
+    assert.equal(revRes.reconciliation.settlement_status, 'reversed_mistaken_match');
+    assert.equal(revRes.reconciliation.id, recRow.id);
+
+    // Ordinary verifyPayment on loserOrderId with contestedBankRef MUST fail with 409 DUPLICATE_BANK_REFERENCE
+    await assert.rejects(
+      async () => {
+        await app.adminOperationsService.verifyPayment(adminSession, loserOrderId, {
+          ...baseVerifyPayload,
+          bank_reference: contestedBankRef,
+          idempotency_key: crypto.randomUUID(),
+        });
+      },
+      (err) => {
+        assert.equal(err.statusCode, 409);
+        assert.equal(err.code, 'DUPLICATE_BANK_REFERENCE');
+        return true;
+      }
+    );
+
+    // Direct PostgreSQL unique index check: inserting a second row with contestedBankRef even when first row is 'reversed_mistaken_match' MUST fail with 23505
+    await assert.rejects(
+      async () => {
+        await env.query(
+          `INSERT INTO payment_reconciliations (
+             id, academy_id, order_id, recipient_account_id, verified_amount_minor, verified_currency,
+             bank_credit_at, reconciliation_mode, bank_reference, reconciliation_evidence,
+             settlement_status, verified_by_operator_id
+           ) VALUES ($1, 'dr-sevilla', $2, 'BNB-DR-SEVILLA-BOB-01', 7900, 'BOB', NOW(), 'standard_reference', $3, 'Direct SQL duplicate attempt', 'applied', 'op_pg_admin')`,
+          [crypto.randomUUID(), loserOrderId, contestedBankRef]
+        );
+      },
+      (err) => {
+        assert.equal(err.code, '23505', 'uq_payment_reconciliations_bank_ref must enforce uniqueness even when existing row is reversed_mistaken_match');
+        return true;
+      }
+    );
+
+    // Atomic reallocation by academy_admin updates the SAME reconciliation_id to point to loserOrderId
+    const reallocRes = await app.adminOperationsService.reallocateReconciliation(adminSession, loserOrderId, {
+      reconciliation_id: recRow.id,
+      reallocated_from_order_id: winnerOrderId,
+      reason: 'Reimputación administrativa autorizada en PostgreSQL real',
+      idempotency_key: crypto.randomUUID(),
+    });
+    assert.equal(reallocRes.statusCode, 200);
+    assert.equal(reallocRes.reconciliation.id, recRow.id);
+    assert.equal(reallocRes.reconciliation.order_id, loserOrderId);
+    assert.equal(reallocRes.reconciliation.reallocated_from_order_id, winnerOrderId);
+    assert.equal(reallocRes.reconciliation.settlement_status, 'applied');
   });
 });
