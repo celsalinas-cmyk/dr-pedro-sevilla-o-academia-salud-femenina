@@ -39,14 +39,14 @@ flowchart LR
 ### 1.2 Invariantes Contractuales Obligatorios
 1. **Autoridad exclusiva del backend administrativo:** Ningún endpoint público ni acción originada desde el navegador del comprador tiene autoridad para transicionar un pedido hacia `paid_verified`, `enrollment_pending` o `fulfilled`.
 2. **El comprobante del comprador NO es pago verificado:** La recepción de una captura o PDF enviado por WhatsApp/correo se registra únicamente como evento informativo (`receipt_received` dentro de `order_events`), manteniendo `orders.status = 'pending_payment'`.
-3. **Conciliación bancaria multidimensional (sin asumir referencias infalibles):** Para autorizar `paid_verified`, el operador autorizado debe comprobar en la banca oficial:
+3. **Conciliación bancaria multidimensional e identidad inmutable del abono:** Para autorizar `paid_verified`, el operador autorizado debe comprobar en la banca oficial:
    - **Importe exacto** (`verified_amount_minor === orders.total_amount_minor`),
    - **Moneda** (`BOB`),
    - **Cuenta receptora oficial ratificada** (`recipient_account_id` / confirmación explícita de cuenta destino), y
    - **Transacción bancaria efectiva** (abono real acreditado en extracto).
-   - La referencia bancaria (`bank_reference`) se utiliza para detectar y bloquear duplicados cuando está disponible, pero el diseño **no asume que siempre estará presente o será inequívoca** (p. ej., transferencias interbancarias QR ACH con glosas truncadas o códigos internos variables). Todo caso sin referencia estándar o con referencia ambigua exige **resolución humana explícita y documentada** antes de conciliar.
+   - **Distinción entre identidad transaccional única y referencia bancaria externa:** Cada verificación bancaria genera un registro propio e inmutable de conciliación (`reconciliation_id` UUID en `payment_reconciliations`) que preserva la identidad y evidencia del abono **independientemente de las transiciones futuras de `orders.status`**. La referencia bancaria externa (`bank_reference`) se utiliza para detectar y bloquear duplicados cuando está disponible, sin asumir que siempre estará presente o será inequívoca (los casos ambiguos requieren resolución humana explícita) y **sin liberar ni permitir reutilizar un abono cuando un pedido es cancelado, anulado o revertido**.
 4. **Prohibición de matrícula sin pago verificado:** El sistema impide técnica y transaccionalmente iniciar (`enrollment_pending`) o confirmar (`fulfilled`) una matrícula si el pedido no ha pasado previamente por `paid_verified`.
-5. **Cierre condicionado a entrega efectiva:** El estado `fulfilled` solo se registra después de que el operador académico ha habilitado el curso (o los 4 cursos del paquete `mujer-informada-4`) en Moodle y verificado que la estudiante dispone de acceso activo.
+5. **Cierre condicionado a entrega efectiva (Pack = 4 matrículas verificadas):** El estado `fulfilled` solo se registra después de que el operador académico ha habilitado el curso individual —o las **cuatro matrículas verificadas individualmente** en el caso del paquete `mujer-informada-4`— en Moodle y confirmado que la estudiante dispone de acceso activo. Los identificadores de curso Moodle del mapa SKU y el parámetro de vigencia de 180 días tienen carácter **provisional** hasta su ratificación comercial previa a la activación.
 6. **Aislamiento multi-academia estricto:** Todas las operaciones administrativas resuelven `academy_id = 'dr-sevilla'` desde la configuración/sesión autenticada del servidor y utilizan las claves foráneas compuestas `(academy_id, order_id)` establecidas en PostgreSQL ([001_initial_schema.sql](file:///Users/carlosloayza/.gemini/antigravity/scratch/dr-pedro-sevilla/backend/migrations/001_initial_schema.sql#L75-L119)).
 7. **Exclusión de alcance (Anti-Bloat):**
    - No se desarrolla un CRM generalista (sin embudos comerciales, etiquetas libres, historial de chats ni campañas de marketing).
@@ -58,11 +58,23 @@ flowchart LR
 
 ## 2. Matriz de Roles, Permisos y Acciones (RBAC Mínimo)
 
-### 2.1 Modelo RBAC Mínimo y Aprovisionamiento Simple
-- **Sin sistema complejo de gestión de usuarios:** Los operadores autorizados de `dr-sevilla` se aprovisionan mediante configuración/semilla controlada en el backend (identificador nominal `operator_id`, rol asignado, hash de credencial y estado activo), sin pantallas de CRUD de usuarios, sin gestión de perfiles complejos ni recuperación de contraseñas por correo.
-- **Autenticación obligatoria por solicitud:** Todo request a `/api/v1/admin/*` exige sesión administrativa válida (`Authorization: Bearer <token>` o cookie `HttpOnly; Secure; SameSite=Strict` con expiración corta).
-- **Trazabilidad nominal obligatoria:** El backend resuelve `operator_id` y `operator_role` exclusivamente desde la sesión verificada en servidor y los graba en cada fila de `order_events`. Nunca se acepta `operator_id` ni `role` enviados libremente en el payload por el cliente.
-- **Cero autorizaciones financieras implícitas:** Ninguna acción de coordinación ni de matrícula otorga ni presume permisos financieros. Cada acción verifica explícitamente el rol requerido en el endpoint correspondiente, y ni CORS, ni banderas frontend, ni el conocimiento de `order_number`, `order.id` o `opaque_token` otorgan autorización administrativa.
+### 2.1 Modelo RBAC Mínimo, Autenticación, Autorización y Revocación de Sesiones
+- **Bootstrap nominal sin CRUD empresarial de usuarios:** Los operadores autorizados de `dr-sevilla` se aprovisionan de forma determinista mediante semilla/configuración controlada en PostgreSQL (tabla `admin_operators` con `operator_id` nominal, `academy_id = 'dr-sevilla'`, `role` en `{'academic_operator', 'finance_verifier', 'academy_admin'}`, `password_hash`, `is_active` y `session_version`), sin pantallas de CRUD de usuarios, sin auto-registro ni flujos complejos de gestión de cuentas.
+- **Protección de secretos y credenciales:**
+  - Las contraseñas de operadores nunca se almacenan ni transitan en texto plano en base de datos; se persisten exclusivamente como hashes con sal (`scrypt` / `Argon2id`) verificados en tiempo constante (`crypto.timingSafeEqual`).
+  - El secreto de firma/derivación de sesión (`ADMIN_SESSION_SECRET`, mínimo 32 bytes de alta entropía) se inyecta exclusivamente por variable de entorno de servidor y está sujeto a las reglas de sanitización total de logs de Gate 2-A1.
+- **Mecanismo mínimo de sesión, expiración y revocación inmediata:**
+  - **Inicio de sesión (`POST /api/v1/admin/session/login`):** Autentica `operator_id` y contraseña contra `admin_operators` (`is_active = true`) y emite una sesión respaldada en servidor (tabla `admin_sessions` con `session_id` UUID/token opaco con hash en BD, `operator_id`, `academy_id`, `role`, `csrf_token`, `created_at`, `expires_at`, `revoked_at`, `revoke_reason`) entregada mediante cookie `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/admin` (o token opaco de sesión en clientes de prueba autorizados) junto con un `csrf_token` asociado a la sesión.
+  - **Expiración corta:** Toda sesión administrativa tiene una vigencia máxima estricta (`expires_at = created_at + 8 hours`). Vencido dicho plazo, el servidor rechaza automáticamente cualquier solicitud con `401 Unauthorized`.
+  - **Revocación inmediata (por cierre de sesión o emergencia administrativa):**
+    1. *Logout explícito (`POST /api/v1/admin/session/logout`):* Marca `revoked_at = NOW()` y `revoke_reason = 'operator_logout'` en `admin_sessions`, limpiando la cookie de sesión.
+    2. *Revocación forzosa o desactivación de operador:* Marcar `revoked_at = NOW()` en `admin_sessions`, incrementar `admin_operators.session_version` o establecer `admin_operators.is_active = false` invalida **de forma inmediata en la siguiente petición** todas las sesiones activas de ese operador sin esperar a que expire la cookie/token.
+- **Autorización server-side por acción y protección contra falsificación/suplantación:**
+  - En cada request a `/api/v1/admin/*`, el middleware valida en servidor que la sesión exista, no esté vencida (`expires_at > NOW()`), no esté revocada (`revoked_at IS NULL`) y pertenezca a un operador activo (`is_active = true`) de `academy_id = 'dr-sevilla'` (`401 Unauthorized` en caso contrario).
+  - A continuación, el servidor verifica explícitamente que el `role` de la sesión esté autorizado para la acción/endpoint invocado según la Matriz 2.3 (`403 Forbidden` si el rol no posee permiso).
+  - **Protección contra falsificación (CSRF / Origin):** Todos los endpoints mutantes (`POST /api/v1/admin/*`) exigen coincidencia estricta del encabezado `X-CSRF-Token` con el `csrf_token` de la sesión activa y validación de `Origin` permitido, además de `SameSite=Strict`.
+  - **Protección contra suplantación de identidad (Anti-Spoofing):** El backend resuelve `operator_id`, `operator_role` y `academy_id` **exclusivamente** desde la sesión autenticada en servidor. Cualquier intento de enviar o sobreescribir `operator_id`, `operator_role` o `academy_id` en el body, query string o encabezados es rechazado/ignorado y jamás puede alterar la autoría registrada en `order_events` ni en `payment_reconciliations`.
+  - **Cero autorizaciones financieras implícitas:** Ninguna acción de coordinación ni de matrícula otorga ni presume permisos financieros; ni el frontend, ni el conocimiento de `order_number`, `order.id` u `opaque_token` conceden autoridad administrativa.
 
 ### 2.2 Definición de los Tres Roles Operativos
 1. **`academic_operator` (Operador Académico):** Consulta la bandeja de pedidos, genera/envía manualmente el QR oficial, registra eventos de coordinación (`qr_sent`, `receipt_received`, `payment_discrepancy`) y ejecuta el flujo de matrícula en Moodle (`paid_verified → enrollment_pending → fulfilled`). **Nunca** puede verificar pagos ni autorizar pagos tardíos.
@@ -78,6 +90,8 @@ flowchart LR
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | Crear pedido (`pending_payment`) | `POST /api/v1/checkout` | **SÍ** | — | — | — |
 | Consultar estado público sin PII | `GET /api/v1/orders/:opaque_token/status` | **SÍ** | — | — | — |
+| Iniciar sesión de operador | `POST /api/v1/admin/session/login` | Credenciales nominales | **SÍ** | **SÍ** | **SÍ** |
+| Cerrar / revocar sesión activa | `POST /api/v1/admin/session/logout` | NO (`401`) | **SÍ** | **SÍ** | **SÍ** |
 | Listar bandeja de pedidos (con PII autorizada) | `GET /api/v1/admin/orders` | NO (`401`) | **SÍ** | **SÍ** | **SÍ** |
 | Consultar detalle e historial `order_events` | `GET /api/v1/admin/orders/:order_id` | NO (`401`) | **SÍ** | **SÍ** | **SÍ** |
 | Registrar envío de QR (`qr_sent`) | `POST /api/v1/admin/orders/:order_id/coordination` | NO (`401`) | **SÍ** | **SÍ** | **SÍ** |
@@ -137,13 +151,13 @@ Todas las transiciones ejecutan `SELECT ... FROM orders WHERE academy_id = $1 AN
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **T-00** | `NULL` | `pending_payment` | `POST /api/v1/checkout` | Público | Precio oficial desde BD, `expires_at = created_at + 72h`, `idempotency_key` única por academia. |
 | **T-01** | `pending_payment` | `pending_payment` | `POST .../coordination` | `academic_operator`, `finance_verifier`, `academy_admin` | Registra `metadata.event_type IN ('qr_sent', 'receipt_received', 'payment_discrepancy')`, `channel`, `notes`, `operator_id`. No altera `orders.status`. |
-| **T-02** | `pending_payment` | `paid_verified` | `POST .../verify-payment` | `finance_verifier`, `academy_admin` | 1. `orders.status === 'pending_payment'` y `orders.expires_at >= NOW()` (un pedido vencido es rechazado aquí y debe ir por **T-06**).<br>2. `verified_amount_minor === orders.total_amount_minor` y `verified_currency === 'BOB'`.<br>3. `recipient_account_verified === true` e identificación de `recipient_account_id` oficial.<br>4. `effective_transaction_verified === true` y `bank_credit_at` válido.<br>5. Si existe `bank_reference` estándar: se normaliza y se verifica que no esté duplicada en otro pedido activo de `dr-sevilla`.<br>6. Si la referencia bancaria está ausente o es ambigua (`reconciliation_mode = 'manual_resolution'`): requiere rol `academy_admin` (o resolución humana explícita) documentando en `reconciliation_evidence` (mín. 20 caracteres) los datos observados en el extracto (fecha/hora exacta, titular/glosa y cuenta receptora). |
+| **T-02** | `pending_payment` | `paid_verified` | `POST .../verify-payment` | `finance_verifier`, `academy_admin` | 1. `orders.status === 'pending_payment'` y `orders.expires_at >= NOW()` (un pedido vencido es rechazado aquí y debe ir por **T-06**).<br>2. `verified_amount_minor === orders.total_amount_minor` y `verified_currency === 'BOB'`.<br>3. `recipient_account_verified === true` e identificación de `recipient_account_id` oficial.<br>4. `effective_transaction_verified === true` y `bank_credit_at` válido.<br>5. Inserta registro permanente en `payment_reconciliations` (`reconciliation_id` UUID, `settlement_status = 'applied'`).<br>6. Si existe `bank_reference` estándar: se normaliza y se verifica en `payment_reconciliations` que no esté reservada ni consumida por ningún abono previo (`settlement_status IN ('applied', 'refunded_or_annulled')`), incluso de pedidos cancelados o revertidos.<br>7. Si la referencia bancaria está ausente o es ambigua (`reconciliation_mode = 'manual_resolution'`): requiere rol `academy_admin` (o resolución humana explícita) documentando en `reconciliation_evidence` (mín. 20 caracteres) los datos observados en el extracto (fecha/hora exacta, titular/glosa y cuenta receptora). |
 | **T-03** | `paid_verified` | `enrollment_pending` | `POST .../start-enrollment` | `academic_operator`, `academy_admin` | El pedido debe estar exactamente en `paid_verified`. Registra en `order_events` el inicio de alta académica y los cursos Moodle objetivo según el SKU. |
-| **T-04** | `enrollment_pending` | `fulfilled` | `POST .../confirm-enrollment` | `academic_operator`, `academy_admin` | 1. `orders.status === 'enrollment_pending'`.<br>2. `moodle_user_identifier` no vacío.<br>3. `moodle_courses_enrolled` coincide exactamente con los cursos requeridos por el SKU.<br>4. `access_confirmed === true`. |
+| **T-04** | `enrollment_pending` | `fulfilled` | `POST .../confirm-enrollment` | `academic_operator`, `academy_admin` | 1. `orders.status === 'enrollment_pending'`.<br>2. `moodle_user_identifier` no vacío.<br>3. `moodle_courses_enrolled` coincide exactamente con los identificadores requeridos por el SKU (**1 matrícula verificada** para curso individual; **4 matrículas verificadas individualmente** para el pack `mujer-informada-4`).<br>4. `access_confirmed === true`. |
 | **T-05** | `pending_payment` | `expired` | Lazy expiration / Batch | Sistema / Admin | `orders.status === 'pending_payment'` y `NOW() > orders.expires_at`. |
-| **T-06** | `expired` | `paid_verified` | `POST .../verify-late-payment` | Exclusivo `academy_admin` | **Procedimiento estricto de pago tardío (nunca por simple bandera):**<br>1. **Verificación bancaria completa:** todas las comprobaciones de importe (`total_amount_minor`), moneda (`BOB`), cuenta receptora oficial y transacción bancaria efectiva de **T-02**.<br>2. **Justificación obligatoria:** `late_payment_reason` detallado ($\ge 15$ caracteres) explicando por qué el abono ingresó fuera de plazo.<br>3. **Autorización administrativa:** ejecutado exclusivamente por un operador autenticado con rol `academy_admin`.<br>4. **Confirmación de viabilidad de cumplimiento:** `fulfillment_feasibility_confirmed === true` certificando que el curso/paquete sigue vigente y puede matricularse en Moodle. |
+| **T-06** | `expired` | `paid_verified` | `POST .../verify-late-payment` | Exclusivo `academy_admin` | **Procedimiento estricto de pago tardío (nunca por simple bandera):**<br>1. **Verificación bancaria completa y registro en `payment_reconciliations`:** todas las comprobaciones de importe (`total_amount_minor`), moneda (`BOB`), cuenta receptora oficial, transacción bancaria efectiva y no reutilización de abonos de **T-02**.<br>2. **Justificación obligatoria:** `late_payment_reason` detallado ($\ge 15$ caracteres) explicando por qué el abono ingresó fuera de plazo.<br>3. **Autorización administrativa:** ejecutado exclusivamente por un operador autenticado con rol `academy_admin`.<br>4. **Confirmación de viabilidad de cumplimiento:** `fulfillment_feasibility_confirmed === true` certificando que el curso/paquete sigue vigente y puede matricularse en Moodle. |
 | **T-07** | `pending_payment` o `expired` | `cancelled` | `POST .../cancel` | `academic_operator`, `finance_verifier`, `academy_admin` | Prohibido si el pedido ya tiene pago verificado. Exige `reason` obligatorio ($\ge 10$ caracteres). |
-| **T-08** | `paid_verified`, `enrollment_pending` o `fulfilled` | Estado anterior válido | `POST .../reverse` | Exclusivo `academy_admin` | **Reversión auditable append-only:** Solo permite `paid_verified → pending_payment`, `paid_verified → cancelled`, `enrollment_pending → paid_verified` o `fulfilled → enrollment_pending`. Exige `reason` detallado ($\ge 15$ caracteres) y `corrected_event_id`. Jamás modifica ni borra filas previas de `order_events`. |
+| **T-08** | `paid_verified`, `enrollment_pending` o `fulfilled` | Estado anterior válido | `POST .../reverse` | Exclusivo `academy_admin` | **Reversión auditable con preservación de evidencia de abono y control de compensación:**<br>1. Solo permite `paid_verified → pending_payment`, `paid_verified → cancelled`, `enrollment_pending → paid_verified` o `fulfilled → enrollment_pending`.<br>2. Exige `reason` detallado ($\ge 15$ caracteres), `corrected_event_id` y `compensation_control_notes`. Jamás borra filas de `order_events` ni de `payment_reconciliations`.<br>3. En `paid_verified → cancelled` (anulación/devolución): actualiza el registro de `payment_reconciliations` a `settlement_status = 'refunded_or_annulled'` con `reversal_compensation_ref`, **manteniendo ese abono permanentemente bloqueado contra reutilización en cualquier otro pedido**.<br>4. En `paid_verified → pending_payment` (error material de imputación): marca `settlement_status = 'reversed_mistaken_match'` conservando el registro histórico auditable; reimputar ese abono al pedido correcto exige autorización de `academy_admin` referenciando el `reconciliation_id` previo.<br>5. En `fulfilled → enrollment_pending`: exige declarar explícitamente el estado/compensación del acceso Moodle (`access_impact_statement`), prohibiendo deshabilitar silenciosamente un acceso ya entregado sin registro trazable y preservando intacto el abono `applied`. |
 
 ---
 
@@ -202,7 +216,7 @@ Al abrir un pedido (`Ver Detalle` o botón de acción), la vista lateral/modal p
 
 ## 5. Especificación de Endpoints Administrativos y Auditoría
 
-### 5.1 Garantías de Auditoría Inmutable (`order_events`)
+### 5.1 Garantías de Auditoría Inmutable (`order_events`) y Registro Permanente de Conciliaciones (`payment_reconciliations`)
 La tabla `order_events` ([001_initial_schema.sql](file:///Users/carlosloayza/.gemini/antigravity/scratch/dr-pedro-sevilla/backend/migrations/001_initial_schema.sql#L108-L119)) actúa como libro mayor de auditoría **append-only**:
 - **Campos obligatorios en cada evento:**
   - `id` (`UUID`): Identificador único del evento.
@@ -216,26 +230,41 @@ La tabla `order_events` ([001_initial_schema.sql](file:///Users/carlosloayza/.ge
     - `idempotency_key` (`UUID`),
     - `operator_role` (`academic_operator` | `finance_verifier` | `academy_admin`),
     - `action_type` (`qr_sent`, `receipt_received`, `payment_discrepancy`, `verify_payment`, `verify_late_payment`, `start_enrollment`, `confirm_enrollment`, `cancel`, `reverse`),
-    - Datos de conciliación cuando aplique (`bank_reference`, `reconciliation_mode`, `reconciliation_evidence`, `recipient_account_id`, `verified_amount_minor`, `verified_currency`, `bank_credit_at`, `fulfillment_feasibility_confirmed`),
-    - Datos de reversión cuando aplique (`corrected_event_id`, `previous_bank_reference`).
+    - Datos de conciliación cuando aplique (`reconciliation_id`, `bank_reference`, `reconciliation_mode`, `reconciliation_evidence`, `recipient_account_id`, `verified_amount_minor`, `verified_currency`, `bank_credit_at`, `fulfillment_feasibility_confirmed`),
+    - Datos de reversión y compensación cuando aplique (`corrected_event_id`, `reconciliation_id`, `settlement_status_after_reverse`, `reversal_compensation_ref`, `access_impact_statement`).
   - `created_at` (`TIMESTAMPTZ`): Marca temporal del servidor.
 - **Protección contra borrado o alteración histórica:**
   - En la migración incremental `004_admin_operations_and_reconciliation.sql` se incorporará un trigger en PostgreSQL (`BEFORE UPDATE OR DELETE ON order_events`) que lance excepción inmediata (`ORDER_EVENTS_IMMUTABLE`), garantizando a nivel de motor de base de datos que ninguna fila histórica de auditoría pueda ser editada ni eliminada jamás.
-- **Detección de duplicados de referencia bancaria sin asumir disponibilidad universal:**
-  - Columna nullable `bank_reference VARCHAR(64)` en `orders` con índice único parcial:
-    ```sql
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_academy_bank_ref
-    ON orders (academy_id, bank_reference)
-    WHERE bank_reference IS NOT NULL
-      AND status IN ('paid_verified', 'enrollment_pending', 'fulfilled');
-    ```
-  - Si el extracto bancario provee una referencia (`bank_reference`), PostgreSQL impide atómicamente reutilizarla en otro pedido. Si la transferencia carece de referencia estándar (`bank_reference = NULL`, `reconciliation_mode = 'manual_resolution'`), se exige evidencia descriptiva completa y autorización humana explícita registrada en `order_events`.
+- **Identidad y Evidencia Permanente del Abono Bancario (`payment_reconciliations`) — Prevención de Reutilización Independiente de `orders.status`:**
+  - Para evitar que la cancelación o reversión de una orden libere indebidamente un abono ya consumido/devuelto o pierda su evidencia histórica, cada operación de conciliación bancaria se registra en una entidad propia `payment_reconciliations` vinculada por `(academy_id, order_id)` con prohibición absoluta de `DELETE` (trigger `BEFORE DELETE ON payment_reconciliations`):
+    - `id` (`UUID PRIMARY KEY`): **Identidad transaccional única de conciliación (`reconciliation_id`)**, distinta e independiente de la referencia bancaria externa (`bank_reference`).
+    - `academy_id` (`VARCHAR(64) NOT NULL`), `order_id` (`UUID NOT NULL`).
+    - `recipient_account_id` (`VARCHAR(64) NOT NULL`), `verified_amount_minor` (`INTEGER NOT NULL`), `verified_currency` (`CHAR(3) NOT NULL`), `bank_credit_at` (`TIMESTAMPTZ NOT NULL`).
+    - `reconciliation_mode` (`VARCHAR(32) NOT NULL`: `'standard_reference'` | `'manual_resolution'`).
+    - `bank_reference` (`VARCHAR(64)` nullable: código de referencia del extracto bancario cuando existe).
+    - `reconciliation_evidence` (`TEXT NOT NULL`: descripción verificada del abono).
+    - `settlement_status` (`VARCHAR(32) NOT NULL`):
+      - `'applied'`: Abono aplicado activamente al pedido.
+      - `'refunded_or_annulled'`: Abono de un pedido posteriormente anulado/cancelado con devolución o compensación (`paid_verified → cancelled`). **Sigue reservado de forma perpetua y jamás puede reutilizarse en otro pedido.**
+      - `'reversed_mistaken_match'`: Abono desvinculado por error material de imputación (`paid_verified → pending_payment`). Conserva su fila histórica completa (`reversed_by_operator_id`, `reversal_reason`, `reversed_at`); cualquier reimputación posterior al pedido correcto exige rol `academy_admin` referenciando explícitamente el `reconciliation_id` previo.
+    - Índice único en `payment_reconciliations` independiente de `orders.status`:
+      ```sql
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_reconciliations_bank_ref
+      ON payment_reconciliations (academy_id, recipient_account_id, bank_reference)
+      WHERE bank_reference IS NOT NULL
+        AND settlement_status IN ('applied', 'refunded_or_annulled');
+      ```
+  - De este modo, **ningún abono bancario aplicado ni devuelto/anulado puede reutilizarse jamás en otro pedido**, aunque la orden original cambie de estado a `cancelled` o `pending_payment`, y nunca se confunde una referencia bancaria externa opcional/ambigua con la identidad única del registro de conciliación (`reconciliation_id`).
 
 ### 5.2 Contratos de Endpoints Administrativos (`/api/v1/admin/*`)
 
+#### 0. `POST /api/v1/admin/session/login` y `POST /api/v1/admin/session/logout`
+- `login`: Valida `operator_id` y `password` contra `admin_operators` (`is_active = true`), crea la fila en `admin_sessions` (`expires_at = created_at + 8 hours`, `revoked_at = NULL`) y establece la sesión autenticada más `csrf_token`. Credenciales inválidas o cuenta inactiva responden `401 INVALID_ADMIN_CREDENTIALS`.
+- `logout`: Marca `revoked_at = NOW()` en `admin_sessions` e invalida inmediatamente la sesión en servidor.
+
 #### 1. `GET /api/v1/admin/orders` y `GET /api/v1/admin/orders/:order_id`
 - **Roles permitidos:** `academic_operator`, `finance_verifier`, `academy_admin`.
-- Filtran estrictamente por `academy_id = 'dr-sevilla'` y devuelven el estado del pedido, hito de coordinación, datos de contacto académico del comprador y la lista completa de `order_events` inmutables.
+- Filtran estrictamente por `academy_id = 'dr-sevilla'` y devuelven el estado del pedido, hito de coordinación, datos de contacto académico del comprador, registros en `payment_reconciliations` y la lista completa de `order_events` inmutables.
 
 #### 2. `POST /api/v1/admin/orders/:order_id/coordination`
 - **Roles permitidos:** `academic_operator`, `finance_verifier`, `academy_admin`.
@@ -274,7 +303,8 @@ La tabla `order_events` ([001_initial_schema.sql](file:///Users/carlosloayza/.ge
 - **Reglas de validación:**
   - `422 AMOUNT_OR_CURRENCY_MISMATCH` si `verified_amount_minor !== orders.total_amount_minor` o `verified_currency !== 'BOB'`.
   - `422 RECIPIENT_OR_TRANSACTION_UNVERIFIED` si `recipient_account_verified !== true`, `!recipient_account_id` o `effective_transaction_verified !== true`.
-  - Si `reconciliation_mode === 'standard_reference'`: exige `bank_reference` no vacío (6–64 chars) y comprueba unicidad en `(academy_id, bank_reference)` (`409 DUPLICATE_BANK_REFERENCE` en caso de colisión).
+  - Inserta un registro en `payment_reconciliations` con `reconciliation_id` único y `settlement_status = 'applied'`.
+  - Si `reconciliation_mode === 'standard_reference'`: exige `bank_reference` no vacío (6–64 chars) y comprueba en `payment_reconciliations` que no exista ningún abono reservado (`settlement_status IN ('applied', 'refunded_or_annulled')`) con la misma referencia (`409 DUPLICATE_BANK_REFERENCE` en caso de colisión, incluso si la orden previa fue cancelada/anulada).
   - Si `reconciliation_mode === 'manual_resolution'` (cuando el banco no provee referencia inequívoca): exige rol `academy_admin` (o resolución supervisada) y `reconciliation_evidence` detallado ($\ge 20$ caracteres) describiendo titular, fecha/hora exacta y glosa del extracto.
 
 #### 4. `POST /api/v1/admin/orders/:order_id/verify-late-payment` (Pago tardío sobre pedido expirado: `expired → paid_verified`)
@@ -298,7 +328,7 @@ La tabla `order_events` ([001_initial_schema.sql](file:///Users/carlosloayza/.ge
   }
   ```
 - **Reglas estrictas:**
-  1. Ejecuta el 100% de las validaciones bancarias de `verify-payment` (importe, moneda, cuenta receptora, transacción efectiva y control de duplicidad de referencia).
+  1. Ejecuta el 100% de las validaciones bancarias de `verify-payment` (importe, moneda, cuenta receptora, transacción efectiva, registro en `payment_reconciliations` y bloqueo permanente contra reutilización de abonos).
   2. Exige `late_payment_reason` ($\ge 15$ caracteres).
   3. Exige rol `academy_admin` autenticado en sesión.
   4. Exige `fulfillment_feasibility_confirmed === true` (`422 FULFILLMENT_FEASIBILITY_REQUIRED` si falta o es `false`).
@@ -306,25 +336,34 @@ La tabla `order_events` ([001_initial_schema.sql](file:///Users/carlosloayza/.ge
 #### 5. `POST /api/v1/admin/orders/:order_id/start-enrollment` y `POST /api/v1/admin/orders/:order_id/confirm-enrollment`
 - **Roles permitidos:** `academic_operator`, `academy_admin` (`finance_verifier` recibe `403 Forbidden`).
 - `start-enrollment`: Exige `orders.status === 'paid_verified'` y transiciona a `enrollment_pending`.
-- `confirm-enrollment`: Exige `orders.status === 'enrollment_pending'`, `moodle_user_identifier`, `moodle_courses_enrolled` idéntico al mapa del SKU, `access_confirmed === true` y `reason`, transicionando a `fulfilled`.
+- `confirm-enrollment`: Exige `orders.status === 'enrollment_pending'`, `moodle_user_identifier`, `moodle_courses_enrolled` idéntico al mapa del SKU (**las 4 matrículas verificadas individualmente** para el pack `mujer-informada-4`), `access_confirmed === true` y `reason`, transicionando a `fulfilled`.
 
 #### 6. `POST /api/v1/admin/orders/:order_id/cancel` y `POST /api/v1/admin/orders/:order_id/reverse`
-- `cancel`: Permite cancelar pedidos en `pending_payment` o `expired` con `reason` obligatorio ($\ge 10$ caracteres).
-- `reverse`: Exclusivo `academy_admin`. Registra un nuevo evento en `order_events` con `corrected_event_id`, `previous_status`, `new_status`, `operator_id` y `reason` ($\ge 15$ caracteres), restaurando el estado anterior sin alterar ni eliminar ningún evento previo.
+- `cancel`: Permite cancelar únicamente pedidos sin abono verificado (`pending_payment` o `expired`) con `reason` obligatorio ($\ge 10$ caracteres). Si un pedido ya tuvo abono verificado, no puede usar `cancel` simple (`409 PAID_ORDER_REQUIRES_ADMIN_REVERSAL`).
+- `reverse`: Exclusivo `academy_admin`. Registra un nuevo evento en `order_events` con `corrected_event_id`, `previous_status`, `new_status`, `operator_id` (desde sesión), `reason` ($\ge 15$ caracteres) y controles de compensación sin borrar ningún registro de `order_events` ni de `payment_reconciliations`:
+  - En `paid_verified → cancelled`: exige `reversal_compensation_ref` (constancia de devolución/anulación) y marca el abono en `payment_reconciliations` como `settlement_status = 'refunded_or_annulled'`, impidiendo que dicho abono pueda reutilizarse jamás en otra orden.
+  - En `paid_verified → pending_payment`: marca el abono como `settlement_status = 'reversed_mistaken_match'` conservando toda su evidencia histórica.
+  - En `fulfilled → enrollment_pending`: exige `access_impact_statement` documentando el motivo técnico y garantizando que no se deshabilite silenciosamente un acceso ya entregado sin control y trazabilidad.
 
 ---
 
 ## 6. Procedimiento Operativo de Conciliación QR y Matrícula Moodle
 
-### 6.1 Mapa Oficial de Correspondencia SKU → Cursos Moodle (`dr-sevilla`)
+### 6.1 Mapa de Correspondencia SKU → Cursos Moodle (`dr-sevilla`) y Carácter Provisional Pre-Ratificación
 
-| SKU Comercial | Título en Catálogo | Importe Oficial | Cursos Moodle a Habilitar (Vigencia 180 días) |
-| :--- | :--- | :---: | :--- |
-| `endometriosis` | Curso: Endometriosis | `Bs 79.00` (`7900`) | `["endometriosis"]` (1 curso) |
-| `vaginosis` | Curso: Vaginosis Bacteriana | `Bs 79.00` (`7900`) | `["vaginosis"]` (1 curso) |
-| `sop` | Curso: Síndrome de Ovario Poliquístico (SOP) | `Bs 79.00` (`7900`) | `["sop"]` (1 curso) |
-| `aprende-mujer` | Curso: Aprende Mujer — Ecosistema Vaginal | `Bs 79.00` (`7900`) | `["aprende-mujer"]` (1 curso) |
-| `mujer-informada-4` | Pack Completo: Mujer Informada (4 Cursos) | `Bs 199.00` (`19900`) | `["endometriosis", "vaginosis", "sop", "aprende-mujer"]` (4 cursos) |
+> [!WARNING]
+> **Condición de Provisionalidad Comercial y Técnica:**
+> 1. **IDs de Moodle provisionales:** Los identificadores de cursos Moodle listados en la tabla (`"endometriosis"`, `"vaginosis"`, `"sop"`, `"aprende-mujer"`) son **identificadores funcionales provisionales** para el diseño y pruebas de staging hasta verificar y ratificar los IDs/shortnames definitivos de la instancia productiva de Moodle en `Gate 2-A3-A3`.
+> 2. **Vigencia de 180 días provisional:** La duración referencial de **180 días** es un **parámetro operativo provisional sujeto a ratificación comercial formal** por el Product Owner. No debe promocionarse en el sitio público ni prometerse como derecho contractual adquirido mientras no sea ratificada.
+> 3. **Pack = Cuatro matrículas verificadas:** El paquete `mujer-informada-4` exige habilitar y verificar individualmente **las cuatro matrículas** en Moodle antes de marcar `fulfilled`.
+
+| SKU Comercial | Título en Catálogo | Importe Oficial | Identificadores Funcionales Provisionales en Moodle | Vigencia Referencial (Provisional) |
+| :--- | :--- | :---: | :--- | :---: |
+| `endometriosis` | Curso: Endometriosis | `Bs 79.00` (`7900`) | `["endometriosis"]` (1 matrícula verificada) | 180 días *(sujeto a ratificación comercial)* |
+| `vaginosis` | Curso: Vaginosis Bacteriana | `Bs 79.00` (`7900`) | `["vaginosis"]` (1 matrícula verificada) | 180 días *(sujeto a ratificación comercial)* |
+| `sop` | Curso: Síndrome de Ovario Poliquístico (SOP) | `Bs 79.00` (`7900`) | `["sop"]` (1 matrícula verificada) | 180 días *(sujeto a ratificación comercial)* |
+| `aprende-mujer` | Curso: Aprende Mujer — Ecosistema Vaginal | `Bs 79.00` (`7900`) | `["aprende-mujer"]` (1 matrícula verificada) | 180 días *(sujeto a ratificación comercial)* |
+| `mujer-informada-4` | Pack Completo: Mujer Informada (4 Cursos) | `Bs 199.00` (`19900`) | `["endometriosis", "vaginosis", "sop", "aprende-mujer"]` (**4 matrículas verificadas**) | 180 días *(sujeto a ratificación comercial)* |
 
 ### 6.2 Protocolo Operativo Estándar (SOP)
 
@@ -336,14 +375,14 @@ La tabla `order_events` ([001_initial_schema.sql](file:///Users/carlosloayza/.ge
 
 2. **Verificación Bancaria Multidimensional (`finance_verifier` / `academy_admin`):**
    - Contrasta en el extracto bancario oficial los cuatro elementos obligatorios: **cuenta receptora**, **transacción efectiva acreditada**, **moneda (`BOB`)** e **importe exacto** (`Bs 79.00` o `Bs 199.00`).
-   - Si el extracto muestra una referencia bancaria inequívoca (`bank_reference`), la ingresa en modo `standard_reference` (el sistema bloquea duplicados automáticamente).
+   - El sistema crea el registro permanente en `payment_reconciliations` (`reconciliation_id` único). Si el extracto muestra una referencia bancaria (`bank_reference`), la ingresa en modo `standard_reference` (el sistema bloquea duplicados incluso frente a pedidos previamente cancelados o anulados).
    - Si el extracto no ofrece una referencia inequívoca o presenta ambigüedad (glosa truncada, transferencia ACH sin código visible o dos compradoras del mismo monto en minutos cercanos), el verificador registra `payment_discrepancy` y escala a **resolución humana** (`academy_admin`), quien contrasta comprobantes/titulares/horarios y documenta la evidencia completa antes de autorizar `paid_verified`.
 
 3. **Resolución de Pagos Tardíos sobre Pedidos Expirados (`academy_admin`):**
    - Cuando un abono ingresa después de las 72 horas (`status = 'expired'`), no basta marcar un check: el `academy_admin` debe comprobar el abono bancario efectivo en la cuenta receptora, verificar que el curso/paquete puede cumplirse en Moodle (`fulfillment_feasibility_confirmed = true`), redactar la justificación (`late_payment_reason`) y ejecutar `verify-late-payment`.
 
 4. **Matriculación en Moodle y Cierre (`academic_operator`):**
-   - Toma el pedido en `paid_verified`, inicia `start-enrollment` (`enrollment_pending`), habilita el curso o los 4 cursos en Moodle, comprueba que el acceso de la estudiante funciona y ejecuta `confirm-enrollment` (`fulfilled`).
+   - Toma el pedido en `paid_verified`, inicia `start-enrollment` (`enrollment_pending`), habilita el curso individual o **las 4 matrículas individuales** del pack en Moodle, comprueba que el acceso de la estudiante funciona y ejecuta `confirm-enrollment` (`fulfilled`).
 
 ---
 
@@ -354,22 +393,22 @@ La tabla `order_events` ([001_initial_schema.sql](file:///Users/carlosloayza/.ge
 | Riesgo Identificado | Impacto | Control de Mitigación en Diseño |
 | :--- | :---: | :--- |
 | **R-01: Comprobante falso o editado enviado por WhatsApp** | Alto | `receipt_received` no cambia `orders.status`; `paid_verified` exige comprobar cuenta receptora, importe, moneda y abono efectivo en extracto bancario. |
-| **R-02: Reutilización de un mismo abono bancario o referencia ambigua** | Alto | Índice único parcial `(academy_id, bank_reference)` cuando hay referencia estándar, y escalamiento obligatorio a resolución humana (`academy_admin`) con evidencia detallada cuando la referencia es ausente o ambigua. |
+| **R-02: Reutilización de un mismo abono tras cancelación/reversión o referencia ambigua** | Alto | Tabla `payment_reconciliations` con identidad única `reconciliation_id` y reserva perpetua para abonos `applied` y `refunded_or_annulled` (independiente de `orders.status`), más resolución humana (`academy_admin`) con evidencia detallada cuando la referencia es ausente o ambigua. |
 | **R-03: Reactivación indebida de pedidos expirados** | Alto | Prohibido reactivar `expired → paid_verified` con una simple bandera; requiere endpoint separado exclusivo de `academy_admin`, verificación bancaria completa, justificación escrita y confirmación explícita de que el pedido puede cumplirse. |
-| **R-04: Alta en Moodle sin pago verificado o cursos incompletos** | Alto | `start-enrollment` exige `paid_verified`; `confirm-enrollment` exige `enrollment_pending` y valida `moodle_courses_enrolled` contra el mapa oficial del SKU. |
-| **R-05: Alteración o borrado de evidencia histórica de auditoría** | Alto | Trigger `BEFORE UPDATE OR DELETE ON order_events` en PostgreSQL que hace la bitácora estrictamente append-only; toda corrección se registra como un nuevo evento `reverse` con `operator_id`, `corrected_event_id` y `reason`. |
-| **R-06: Autorizaciones financieras implícitas o sobre-ingeniería de usuarios** | Medio | RBAC mínimo de 3 roles aprovisionados en servidor, verificación explícita de rol por endpoint y registro de `operator_id` en cada acción sin construir un sistema complejo de gestión de usuarios. |
+| **R-04: Alta en Moodle sin pago verificado, pack incompleto o IDs/vigencia no ratificados** | Alto | `start-enrollment` exige `paid_verified`; `confirm-enrollment` exige las 4 matrículas verificadas para el pack `mujer-informada-4`; los IDs Moodle y la vigencia de 180 días quedan marcados como provisionales hasta su ratificación comercial en `Gate 2-A3-A3`. |
+| **R-05: Alteración/borrado de evidencia histórica o reversión silenciosa de accesos** | Alto | Triggers en PostgreSQL que impiden `UPDATE`/`DELETE` en `order_events` y `DELETE` en `payment_reconciliations`; toda reversión exige `corrected_event_id`, `reason` y control de compensación (`reversal_compensation_ref` o `access_impact_statement`). |
+| **R-06: Secuestro de sesión, falsificación CSRF o suplantación de `operator_id`** | Alto | Sesiones server-side (`admin_sessions`) con expiración de 8h, revocación inmediata en BD (`revoked_at` / `is_active`), protección CSRF (`X-CSRF-Token` + `SameSite=Strict`), autorización por rol en servidor y resolución exclusiva de `operator_id` desde sesión. |
 
 ### 7.2 Criterios de Aceptación PASS/FAIL (Para Auditoría de Implementación en Gate 2-A3)
 
-1. **Autenticación, RBAC Mínimo y Cero Autorización Implícita (PASS/FAIL):**
-   - `PASS` si todos los endpoints `/api/v1/admin/*` exigen sesión válida (`401` sin sesión), registran `operator_id` real desde sesión, bloquean a `academic_operator` en verificaciones bancarias (`403`) y bloquean a `finance_verifier` en matrículas Moodle, pagos tardíos y reversiones (`403`).
-2. **Conciliación Bancaria Completa y Manejo de Casos Ambiguos (PASS/FAIL):**
-   - `PASS` si `verify-payment` valida importe, moneda (`BOB`), cuenta receptora y transacción efectiva; rechaza con `409` cualquier `bank_reference` duplicada en `dr-sevilla`; y exige resolución humana documentada cuando no existe referencia inequívoca.
+1. **Autenticación, Revocación de Sesión, RBAC y Anti-Suplantación (PASS/FAIL):**
+   - `PASS` si todos los endpoints `/api/v1/admin/*` exigen sesión activa no revocada (`401` sin sesión, expirada o revocada), validan protección anti-falsificación (`CSRF`), resuelven `operator_id` exclusivamente desde sesión (ignorando/rechazando suplantación en payload), bloquean a `academic_operator` en verificaciones bancarias (`403`) y bloquean a `finance_verifier` en matrículas Moodle, pagos tardíos y reversiones (`403`).
+2. **Conciliación Bancaria Permanente y No Reutilización ante Cancelación/Reversión (PASS/FAIL):**
+   - `PASS` si cada verificación crea su registro en `payment_reconciliations` validando importe, moneda (`BOB`), cuenta receptora y transacción efectiva; si un abono aplicado o anulado/devuelto (`paid_verified → cancelled`) permanece reservado e impide reutilizar su referencia en otro pedido (`409`); y si ningún `reverse` borra evidencia de abono.
 3. **Control Estricto de Pago Tardío `expired → paid_verified` (PASS/FAIL):**
    - `PASS` si `verify-payment` ordinario rechaza pedidos expirados (`409`) y si `verify-late-payment` exige simultáneamente rol `academy_admin`, verificación bancaria completa, `late_payment_reason` y `fulfillment_feasibility_confirmed === true`.
-4. **Inmutabilidad Append-Only de `order_events` y Reversiones Trazables (PASS/FAIL):**
-   - `PASS` si PostgreSQL rechaza cualquier `UPDATE` o `DELETE` sobre `order_events`, si cada evento conserva `operator_id`, fecha, `previous_status`, `new_status`, `reason` y referencia de conciliación, y si las reversiones agregan nuevos eventos sin borrar historial.
+4. **Inmutabilidad Append-Only de `order_events` y Reversiones con Compensación (PASS/FAIL):**
+   - `PASS` si PostgreSQL rechaza cualquier `UPDATE` o `DELETE` sobre `order_events` y cualquier `DELETE` sobre `payment_reconciliations`, y si las reversiones exigen motivo, referencia de compensación y trazabilidad completa sin deshabilitar silenciosamente accesos entregados.
 5. **No Regresión de Gate 1, Gate 2-A1 y Gate 2-A2 (PASS/FAIL):**
    - `PASS` si las 39 pruebas existentes continúan pasando al 100% en Linux CI junto con las nuevas pruebas unitarias, E2E y de PostgreSQL real.
 
@@ -379,21 +418,21 @@ La tabla `order_events` ([001_initial_schema.sql](file:///Users/carlosloayza/.ge
 
 ```mermaid
 flowchart TD
-    P["Gate 2-A3-P (Actual): Diseño Operativo Documental"] --> A1["Incremento Gate 2-A3-A1: Backend Admin, RBAC, Migración 004 Append-Only y Tests PG Real"]
+    P["Gate 2-A3-P (Actual): Diseño Operativo Documental"] --> A1["Incremento Gate 2-A3-A1: Backend Admin, Sesiones, payment_reconciliations, Migración 004 y Tests PG Real"]
     A1 --> A2["Incremento Gate 2-A3-A2: UI Mínima de Bandeja Operativa y Tests E2E Chrome"]
-    A2 --> A3["Incremento Gate 2-A3-A3: Ratificación Comercial PO y Checklist Pre-Activación"]
+    A2 --> A3["Incremento Gate 2-A3-A3: Ratificación Comercial PO (IDs Moodle, Vigencia, Cuenta y Operadores)"]
 ```
 
-1. **Incremento `Gate 2-A3-A1` — Backend Administrativo, RBAC Mínimo y Auditoría Append-Only:**
-   - Migración incremental `004_admin_operations_and_reconciliation.sql` (trigger de inmutabilidad en `order_events`, columna e índice único parcial `bank_reference` en `orders`, e índices operativos).
-   - Autenticación de operador y RBAC mínimo (`academic_operator`, `finance_verifier`, `academy_admin`) + servicio transaccional `OrderOperationsService` para coordinación, verificación bancaria, pago tardío, matrícula Moodle, cancelación y reversión.
-   - Pruebas unitarias (`pg-mem`), pruebas de concurrencia e inmutabilidad en PostgreSQL 16 real y sanitización de logs.
+1. **Incremento `Gate 2-A3-A1` — Backend Administrativo, Sesiones Revocables, Conciliación Permanente y Auditoría Append-Only:**
+   - Migración incremental `004_admin_operations_and_reconciliation.sql` (tablas `admin_operators`, `admin_sessions` y `payment_reconciliations`, trigger de inmutabilidad en `order_events` y prohibición de borrado en `payment_reconciliations`).
+   - Autenticación/revocación de sesiones de operador, protección CSRF, RBAC mínimo (`academic_operator`, `finance_verifier`, `academy_admin`) y servicio transaccional `OrderOperationsService`.
+   - Pruebas automatizadas de `401`/`403`/revocación/suplantación/CSRF, no reutilización de abonos tras reversión/cancelación, concurrencia e inmutabilidad en PostgreSQL 16 real y sanitización de logs.
 2. **Incremento `Gate 2-A3-A2` — Bandeja Operativa Mínima (UI) y Pruebas E2E en Navegador Real:**
-   - Interfaz administrativa mínima en HTML/CSS/JS vanilla para operar las colas (`pending_payment`, `paid_verified`, `enrollment_pending`, `fulfilled`, `expired`/`cancelled`) y visualizar la bitácora `order_events`.
-   - Suite E2E en Headless Chrome (CDP) validando el circuito completo: pedido → QR manual → abono verificado → matrícula Moodle.
-3. **Incremento `Gate 2-A3-A3` — Ratificación Pre-Activación Comercial:**
-   - Ratificación con el Product Owner de la cuenta bancaria receptora oficial, canal de WhatsApp académico y operadores designados antes de habilitar cobros reales.
+   - Interfaz administrativa mínima en HTML/CSS/JS vanilla para operar las colas (`pending_payment`, `paid_verified`, `enrollment_pending`, `fulfilled`, `expired`/`cancelled`) y visualizar la bitácora `order_events` y conciliaciones.
+   - Suite E2E en Headless Chrome (CDP) validando el circuito completo: pedido → QR manual → abono verificado → matrícula Moodle (incluyendo las 4 matrículas del pack).
+3. **Incremento `Gate 2-A3-A3` — Ratificación Comercial Pre-Activación:**
+   - Ratificación formal con el Product Owner de: (a) los IDs definitivos de cursos en Moodle que reemplacen a los identificadores funcionales provisionales, (b) la vigencia comercial definitiva de acceso (actualmente 180 días provisionales), (c) la cuenta bancaria receptora oficial y (d) el canal y operadores designados antes de habilitar cobros reales.
 
 ---
 
-**PARADA OBLIGATORIA — DOCUMENTO DE DISEÑO PUBLICADO PARA REVISIÓN EN PR (GATE 2-A3-P)**
+**PARADA OBLIGATORIA — DOCUMENTO DE DISEÑO ACTUALIZADO EN PR #4 PARA VERIFICACIÓN DE CODEX (GATE 2-A3-P)**
