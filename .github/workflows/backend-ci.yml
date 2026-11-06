@@ -12,6 +12,7 @@ on:
     branches:
       - feature/gate2-commerce-core
       - feature/gate2-a2-checkout-ui
+      - feature/gate2-a3-a1-admin-core
 
 jobs:
   test-linux:

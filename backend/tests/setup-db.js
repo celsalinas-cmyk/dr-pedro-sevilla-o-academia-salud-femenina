@@ -24,6 +24,14 @@ export async function createTestDatabase() {
   const migration003 = fs.readFileSync(path.join(migrationsDir, '003_orders_token_expiration_and_utm.sql'), 'utf8');
   await pool.query(migration003);
 
+  // Apply incremental migration 004 for admin operations, sessions, and payment reconciliations
+  // (Strip PL/pgSQL trigger section for pg-mem compatibility; triggers are tested on real PostgreSQL 16)
+  let migration004 = fs.readFileSync(path.join(migrationsDir, '004_admin_operations_and_reconciliation.sql'), 'utf8');
+  migration004 = migration004
+    .split('-- 5. IMMUTABILITY TRIGGERS')[0]
+    .replace(/DEFAULT gen_random_uuid\(\)/g, '');
+  await pool.query(migration004);
+
   // Register nextval function in pg-mem
   let seqCounter = 1000;
   pgMem.public.registerFunction({
@@ -56,10 +64,39 @@ export async function createTestDatabase() {
   `;
   await pool.query(seedSql);
 
+  let activeTxCount = 0;
+  let sharedBackup = null;
+
   return {
     pool,
     query: (text, params) => pool.query(text, params),
-    getClient: () => pool.connect(),
+    getClient: async () => {
+      const rawClient = await pool.connect();
+      return {
+        query: async (text, params) => {
+          const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+          if (normalized === 'BEGIN') {
+            activeTxCount += 1;
+            if (activeTxCount === 1) {
+              sharedBackup = pgMem.backup();
+            } else {
+              sharedBackup = null;
+            }
+          } else if (normalized === 'COMMIT') {
+            activeTxCount = Math.max(0, activeTxCount - 1);
+            sharedBackup = null;
+          } else if (normalized === 'ROLLBACK') {
+            if (sharedBackup && activeTxCount === 1) {
+              sharedBackup.restore();
+            }
+            activeTxCount = Math.max(0, activeTxCount - 1);
+            sharedBackup = null;
+          }
+          return rawClient.query(text, params);
+        },
+        release: () => rawClient.release(),
+      };
+    },
     close: () => pool.end(),
   };
 }
