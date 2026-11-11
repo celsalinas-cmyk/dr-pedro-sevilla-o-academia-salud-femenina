@@ -232,29 +232,21 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
     assert.equal(spoofQueryRes.statusCode, 403);
     assert.equal(JSON.parse(spoofQueryRes.body).error, 'OPERATOR_SPOOFING_FORBIDDEN');
 
-    // 2b. academic_operator is forbidden (403) from verify-payment, verify-late-payment, reallocate-reconciliation, reverse
-    for (const endpoint of ['verify-payment', 'verify-late-payment', 'reallocate-reconciliation', 'reverse']) {
-      const res = await app.inject({
-        method: 'POST',
-        url: `/api/v1/admin/orders/${orderId}/${endpoint}`,
-        headers: {
-          cookie: academicAuth.cookie,
-          'x-csrf-token': academicAuth.csrfToken,
-        },
-        payload: { idempotency_key: crypto.randomUUID() },
-      });
-      assert.equal(res.statusCode, 403, `academic_operator must receive 403 on ${endpoint}`);
-      assert.equal(JSON.parse(res.body).error, 'INSUFFICIENT_ROLE_PERMISSIONS');
-    }
+    // 2b. academic_operator is forbidden (403) from verify-payment
+    const academicVerifyRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/orders/${orderId}/verify-payment`,
+      headers: {
+        cookie: academicAuth.cookie,
+        'x-csrf-token': academicAuth.csrfToken,
+      },
+      payload: { idempotency_key: crypto.randomUUID() },
+    });
+    assert.equal(academicVerifyRes.statusCode, 403, 'academic_operator must receive 403 on verify-payment');
+    assert.equal(JSON.parse(academicVerifyRes.body).error, 'INSUFFICIENT_ROLE_PERMISSIONS');
 
-    // 2c. finance_verifier is forbidden (403) from verify-late-payment, reallocate-reconciliation, start-enrollment, confirm-enrollment, reverse
-    for (const endpoint of [
-      'verify-late-payment',
-      'reallocate-reconciliation',
-      'start-enrollment',
-      'confirm-enrollment',
-      'reverse',
-    ]) {
+    // 2c. finance_verifier is forbidden (403) from start-enrollment and confirm-enrollment
+    for (const endpoint of ['start-enrollment', 'confirm-enrollment']) {
       const res = await app.inject({
         method: 'POST',
         url: `/api/v1/admin/orders/${orderId}/${endpoint}`,
@@ -266,6 +258,20 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
       });
       assert.equal(res.statusCode, 403, `finance_verifier must receive 403 on ${endpoint}`);
       assert.equal(JSON.parse(res.body).error, 'INSUFFICIENT_ROLE_PERMISSIONS');
+    }
+
+    // 2d. Postponed advanced financial exception endpoints are not exposed in the MVP HTTP surface (404)
+    for (const postponedEndpoint of ['verify-late-payment', 'reallocate-reconciliation', 'reverse']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/orders/${orderId}/${postponedEndpoint}`,
+        headers: {
+          cookie: financeAuth.cookie,
+          'x-csrf-token': financeAuth.csrfToken,
+        },
+        payload: { idempotency_key: crypto.randomUUID() },
+      });
+      assert.equal(res.statusCode, 404, `Postponed endpoint ${postponedEndpoint} must return 404 in simplified MVP`);
     }
   });
 
@@ -373,7 +379,7 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
     assert.equal(JSON.parse(prematureConfirm.body).error, 'CONFIRM_ENROLLMENT_REQUIRES_ENROLLMENT_PENDING');
   });
 
-  await t.test('4. Bank Verification Controls & Ambiguous/Reference-less Deposit Resolution (manual_resolution)', async () => {
+  await t.test('4. Bank Verification Controls: Amount/Currency Validation, Standard Bank Reference & Postponed manual_resolution Guard', async () => {
     const financeAuth = await loginOperator(app, 'op_finance_01', 'FinancePassword#2026!');
     const adminAuth = await loginOperator(app, 'op_admin_01', 'AdminPassword#2026!');
 
@@ -410,13 +416,13 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
     assert.equal(mismatchRes.statusCode, 422);
     assert.equal(JSON.parse(mismatchRes.body).error, 'AMOUNT_OR_CURRENCY_MISMATCH');
 
-    // 4b. Ambiguous / reference-less deposit (manual_resolution) is forbidden for finance_verifier (403)
-    const manualByFinance = await app.inject({
+    // 4b. Postponed manual_resolution mode is rejected with 422 VALIDATION_ERROR in simplified MVP
+    const manualAttempt = await app.inject({
       method: 'POST',
       url: `/api/v1/admin/orders/${orderId}/verify-payment`,
       headers: {
-        cookie: financeAuth.cookie,
-        'x-csrf-token': financeAuth.csrfToken,
+        cookie: adminAuth.cookie,
+        'x-csrf-token': adminAuth.csrfToken,
       },
       payload: {
         reconciliation_mode: 'manual_resolution',
@@ -428,44 +434,44 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
         verified_amount_minor: 7900,
         verified_currency: 'BOB',
         bank_credit_at: new Date().toISOString(),
-        reason: 'Conciliación sin referencia estándar',
+        reason: 'Conciliación sin referencia estándar pospuesta en MVP',
         idempotency_key: crypto.randomUUID(),
       },
     });
-    assert.equal(manualByFinance.statusCode, 403);
-    assert.equal(JSON.parse(manualByFinance.body).error, 'MANUAL_RESOLUTION_REQUIRES_ADMIN');
+    assert.equal(manualAttempt.statusCode, 422);
+    assert.equal(JSON.parse(manualAttempt.body).error, 'VALIDATION_ERROR');
 
-    // 4c. academy_admin resolves ambiguous / reference-less deposit via manual_resolution (200)
-    const manualByAdmin = await app.inject({
+    // 4c. Standard bank reference verification succeeds (200) and transitions order to paid_verified
+    const validStandardVerify = await app.inject({
       method: 'POST',
       url: `/api/v1/admin/orders/${orderId}/verify-payment`,
       headers: {
-        cookie: adminAuth.cookie,
-        'x-csrf-token': adminAuth.csrfToken,
+        cookie: financeAuth.cookie,
+        'x-csrf-token': financeAuth.csrfToken,
       },
       payload: {
-        reconciliation_mode: 'manual_resolution',
-        bank_reference: null,
-        reconciliation_evidence: 'Abono interbancario ACH sin glosa visible en extracto BNB línea 44 de fecha 05/11',
+        reconciliation_mode: 'standard_reference',
+        bank_reference: 'BNB-20261105-7771',
+        reconciliation_evidence: 'Abono QR verificado en extracto BNB línea 44 de fecha 05/11',
         recipient_account_id: 'BNB-DR-SEVILLA-BOB-01',
         recipient_account_verified: true,
         effective_transaction_verified: true,
         verified_amount_minor: 7900,
         verified_currency: 'BOB',
         bank_credit_at: new Date().toISOString(),
-        reason: 'Resolución administrativa de abono sin referencia unívoca en extracto',
+        reason: 'Confirmación humana de pago verificado en extracto bancario',
         idempotency_key: crypto.randomUUID(),
       },
     });
-    assert.equal(manualByAdmin.statusCode, 200);
-    const manualBody = JSON.parse(manualByAdmin.body);
-    assert.equal(manualBody.order.status, 'paid_verified');
-    assert.equal(manualBody.reconciliation.reconciliation_mode, 'manual_resolution');
-    assert.equal(manualBody.reconciliation.bank_reference, null);
-    assert.equal(manualBody.reconciliation.settlement_status, 'applied');
+    assert.equal(validStandardVerify.statusCode, 200);
+    const verifiedBody = JSON.parse(validStandardVerify.body);
+    assert.equal(verifiedBody.order.status, 'paid_verified');
+    assert.equal(verifiedBody.reconciliation.reconciliation_mode, 'standard_reference');
+    assert.equal(verifiedBody.reconciliation.bank_reference, 'BNB-20261105-7771');
+    assert.equal(verifiedBody.reconciliation.settlement_status, 'applied');
   });
 
-  await t.test('5. Late Payment Resolution: Rejects Ordinary Verify on Expired Order & Requires Full Admin Controls', async () => {
+  await t.test('5. Expired Order Protection: Rejects Ordinary Verify on Expired Order (409)', async () => {
     const financeAuth = await loginOperator(app, 'op_finance_01', 'FinancePassword#2026!');
     const adminAuth = await loginOperator(app, 'op_admin_01', 'AdminPassword#2026!');
 
@@ -483,7 +489,7 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
       [orderId]
     );
 
-    // 5a. Ordinary verify-payment on expired order is rejected with 409 ORDER_EXPIRED_REQUIRES_LATE_PAYMENT_AUTH
+    // Ordinary verify-payment on expired order is rejected with 409 ORDER_EXPIRED_REQUIRES_LATE_PAYMENT_AUTH
     const ordinaryOnExpired = await app.inject({
       method: 'POST',
       url: `/api/v1/admin/orders/${orderId}/verify-payment`,
@@ -501,74 +507,18 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
         verified_amount_minor: 7900,
         verified_currency: 'BOB',
         bank_credit_at: new Date().toISOString(),
-        reason: 'Intentando usar verify-payment ordinario',
+        reason: 'Intentando usar verify-payment ordinario sobre pedido expirado',
         idempotency_key: crypto.randomUUID(),
       },
     });
     assert.equal(ordinaryOnExpired.statusCode, 409);
     assert.equal(JSON.parse(ordinaryOnExpired.body).error, 'ORDER_EXPIRED_REQUIRES_LATE_PAYMENT_AUTH');
-
-    // 5b. verify-late-payment without fulfillment_feasibility_confirmed = true is rejected with 422
-    const missingFeasibility = await app.inject({
-      method: 'POST',
-      url: `/api/v1/admin/orders/${orderId}/verify-late-payment`,
-      headers: {
-        cookie: adminAuth.cookie,
-        'x-csrf-token': adminAuth.csrfToken,
-      },
-      payload: {
-        reconciliation_mode: 'standard_reference',
-        bank_reference: 'BNB-LATE-0001',
-        reconciliation_evidence: 'Abono verificado en extracto BNB tras vencimiento',
-        recipient_account_id: 'BNB-DR-SEVILLA-BOB-01',
-        recipient_account_verified: true,
-        effective_transaction_verified: true,
-        verified_amount_minor: 7900,
-        verified_currency: 'BOB',
-        bank_credit_at: new Date().toISOString(),
-        late_payment_reason: 'Compradora pagó el QR 4 horas después del vencimiento',
-        fulfillment_feasibility_confirmed: false,
-        idempotency_key: crypto.randomUUID(),
-      },
-    });
-    assert.equal(missingFeasibility.statusCode, 422);
-    assert.equal(JSON.parse(missingFeasibility.body).error, 'FULFILLMENT_FEASIBILITY_REQUIRED');
-
-    // 5c. verify-late-payment with academy_admin + bank verification + reason + feasibility succeeds
-    const validLateRes = await app.inject({
-      method: 'POST',
-      url: `/api/v1/admin/orders/${orderId}/verify-late-payment`,
-      headers: {
-        cookie: adminAuth.cookie,
-        'x-csrf-token': adminAuth.csrfToken,
-      },
-      payload: {
-        reconciliation_mode: 'standard_reference',
-        bank_reference: 'BNB-LATE-0001',
-        reconciliation_evidence: 'Abono verificado en extracto BNB tras vencimiento',
-        recipient_account_id: 'BNB-DR-SEVILLA-BOB-01',
-        recipient_account_verified: true,
-        effective_transaction_verified: true,
-        verified_amount_minor: 7900,
-        verified_currency: 'BOB',
-        bank_credit_at: new Date().toISOString(),
-        late_payment_reason: 'Compradora pagó el QR 4 horas después del vencimiento y curso sigue vigente',
-        fulfillment_feasibility_confirmed: true,
-        idempotency_key: crypto.randomUUID(),
-      },
-    });
-    assert.equal(validLateRes.statusCode, 200);
-    const lateBody = JSON.parse(validLateRes.body);
-    assert.equal(lateBody.order.status, 'paid_verified');
-    assert.equal(lateBody.event.previous_status, 'expired');
-    assert.equal(lateBody.event.new_status, 'paid_verified');
   });
 
-  await t.test('6. Mandatory Acceptance Case: Order A -> Reverse (reversed_mistaken_match) -> Order B (409 on Ordinary Verify, Atomic Re-imputation over Same reconciliation_id)', async () => {
+  await t.test('6. Deposit Identity & Historical Reservation Protection: Prevents Duplicate Bank Reference Across All Settlement States (409)', async () => {
     const financeAuth = await loginOperator(app, 'op_finance_01', 'FinancePassword#2026!');
     const adminAuth = await loginOperator(app, 'op_admin_01', 'AdminPassword#2026!');
 
-    // Create Order A and Order B (both Pack 19900 BOB)
     await createSampleOrder(app, 'mujer-informada-4', 'orderA');
     await createSampleOrder(app, 'mujer-informada-4', 'orderB');
 
@@ -602,41 +552,17 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
         verified_amount_minor: 19900,
         verified_currency: 'BOB',
         bank_credit_at: new Date().toISOString(),
-        reason: 'Conciliación inicial imputada por error al Pedido A',
+        reason: 'Conciliación inicial del Pedido A',
         idempotency_key: crypto.randomUUID(),
       },
     });
     assert.equal(verifyARes.statusCode, 200);
     const verifyABody = JSON.parse(verifyARes.body);
     const originalReconciliationId = verifyABody.reconciliation.id;
-    const verifyAEventId = verifyABody.event.id;
     assert.equal(verifyABody.reconciliation.settlement_status, 'applied');
 
-    // Step 2: academy_admin reverses Order A (paid_verified -> pending_payment)
-    // Reconciliation R1 transitions to 'reversed_mistaken_match', keeping bank_reference permanently reserved
-    const reverseARes = await app.inject({
-      method: 'POST',
-      url: `/api/v1/admin/orders/${orderA.id}/reverse`,
-      headers: {
-        cookie: adminAuth.cookie,
-        'x-csrf-token': adminAuth.csrfToken,
-      },
-      payload: {
-        target_status: 'pending_payment',
-        corrected_event_id: verifyAEventId,
-        reason: 'El abono #884120 correspondía al Pedido B de homónima, no al Pedido A',
-        idempotency_key: crypto.randomUUID(),
-      },
-    });
-    assert.equal(reverseARes.statusCode, 200);
-    const reverseABody = JSON.parse(reverseARes.body);
-    assert.equal(reverseABody.order.status, 'pending_payment');
-    assert.equal(reverseABody.reconciliation.id, originalReconciliationId);
-    assert.equal(reverseABody.reconciliation.settlement_status, 'reversed_mistaken_match');
-    assert.equal(reverseABody.reconciliation.bank_reference, sharedBankRef);
-
-    // Step 3: Order B attempts to use the reversed reference via ordinary verify-payment -> MUST fail with HTTP 409 DUPLICATE_BANK_REFERENCE
-    const ordinaryReuseOnB = await app.inject({
+    // Step 2: Order B attempts to reuse the applied bank_reference via verify-payment -> 409 DUPLICATE_BANK_REFERENCE
+    const reuseAppliedOnB = await app.inject({
       method: 'POST',
       url: `/api/v1/admin/orders/${orderB.id}/verify-payment`,
       headers: {
@@ -646,89 +572,65 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
       payload: {
         reconciliation_mode: 'standard_reference',
         bank_reference: sharedBankRef,
-        reconciliation_evidence: 'Intentando reutilizar referencia por flujo ordinario en Pedido B',
+        reconciliation_evidence: 'Intento de duplicar referencia ya aplicada en Pedido A',
         recipient_account_id: 'BNB-DR-SEVILLA-BOB-01',
         recipient_account_verified: true,
         effective_transaction_verified: true,
         verified_amount_minor: 19900,
         verified_currency: 'BOB',
         bank_credit_at: new Date().toISOString(),
-        reason: 'Reutilización ordinaria sin autorización administrativa',
+        reason: 'Intento de reutilización de referencia aplicada',
         idempotency_key: crypto.randomUUID(),
       },
     });
-    assert.equal(ordinaryReuseOnB.statusCode, 409);
-    assert.equal(JSON.parse(ordinaryReuseOnB.body).error, 'DUPLICATE_BANK_REFERENCE');
+    assert.equal(reuseAppliedOnB.statusCode, 409);
+    assert.equal(JSON.parse(reuseAppliedOnB.body).error, 'DUPLICATE_BANK_REFERENCE');
 
-    // Step 4: academy_admin executes atomic reallocate-reconciliation on Order B linked to originalReconciliationId
-    const reallocateRes = await app.inject({
+    // Step 3: Even if historical reconciliation is in 'reversed_mistaken_match', verify-payment on Order B still rejects reuse with 409
+    const adminSession = {
+      academyId: 'dr-sevilla',
+      operatorId: 'op_admin_01',
+      role: 'academy_admin',
+    };
+    await app.adminOperationsService.reverseOrderState(adminSession, orderA.id, {
+      target_status: 'pending_payment',
+      corrected_event_id: verifyABody.event.id,
+      reason: 'Registro histórico de reversión preservado en capa de datos',
+      idempotency_key: crypto.randomUUID(),
+    });
+
+    const reuseReversedOnB = await app.inject({
       method: 'POST',
-      url: `/api/v1/admin/orders/${orderB.id}/reallocate-reconciliation`,
+      url: `/api/v1/admin/orders/${orderB.id}/verify-payment`,
       headers: {
-        cookie: adminAuth.cookie,
-        'x-csrf-token': adminAuth.csrfToken,
+        cookie: financeAuth.cookie,
+        'x-csrf-token': financeAuth.csrfToken,
       },
       payload: {
-        reconciliation_id: originalReconciliationId,
-        reallocated_from_order_id: orderA.id,
-        reason: 'Reimputación administrativa autorizada del abono #884120 desde Pedido A hacia Pedido B',
+        reconciliation_mode: 'standard_reference',
+        bank_reference: sharedBankRef,
+        reconciliation_evidence: 'Intentando reutilizar referencia histórica revertida en Pedido B',
+        recipient_account_id: 'BNB-DR-SEVILLA-BOB-01',
+        recipient_account_verified: true,
+        effective_transaction_verified: true,
+        verified_amount_minor: 19900,
+        verified_currency: 'BOB',
+        bank_credit_at: new Date().toISOString(),
+        reason: 'Reutilización ordinaria bloqueada por reserva permanente',
         idempotency_key: crypto.randomUUID(),
       },
     });
-    assert.equal(reallocateRes.statusCode, 200);
-    const reallocateBody = JSON.parse(reallocateRes.body);
-    assert.equal(reallocateBody.order.id, orderB.id);
-    assert.equal(reallocateBody.order.status, 'paid_verified');
-    assert.equal(reallocateBody.reconciliation.id, originalReconciliationId, 'Must preserve exact same reconciliation_id');
-    assert.equal(reallocateBody.reconciliation.order_id, orderB.id);
-    assert.equal(reallocateBody.reconciliation.reallocated_from_order_id, orderA.id);
-    assert.equal(reallocateBody.reconciliation.settlement_status, 'applied');
-    assert.equal(reallocateBody.reconciliation.reallocated_by_operator_id, 'op_admin_01');
+    assert.equal(reuseReversedOnB.statusCode, 409);
+    assert.equal(JSON.parse(reuseReversedOnB.body).error, 'DUPLICATE_BANK_REFERENCE');
 
-    // Verify in DB that only ONE row exists in payment_reconciliations for this deposit
     const dbRecCount = await testDb.query(
-      `SELECT count(*) FROM payment_reconciliations WHERE bank_reference = $1`,
-      [sharedBankRef]
+      `SELECT count(*) FROM payment_reconciliations WHERE id = $1 AND bank_reference = $2`,
+      [originalReconciliationId, sharedBankRef]
     );
-    assert.equal(parseInt(dbRecCount.rows[0].count, 10), 1, 'Deposit identity must never be duplicated');
-
-    // Step 5: Inspect Order A and Order B detail views to verify full bidirectional audit trail
-    const detailARes = await app.inject({
-      method: 'GET',
-      url: `/api/v1/admin/orders/${orderA.id}`,
-      headers: { cookie: adminAuth.cookie },
-    });
-    const detailA = JSON.parse(detailARes.body);
-    assert.equal(detailA.order.status, 'pending_payment');
-    assert.equal(detailA.reconciliations.length, 1);
-    assert.equal(detailA.reconciliations[0].id, originalReconciliationId);
-    assert.ok(
-      detailA.events.some((e) => e.metadata && e.metadata.action_type === 'reconciliation_reallocated_out'),
-      'Order A must record cross-referenced reallocation-out event'
-    );
-
-    const detailBRes = await app.inject({
-      method: 'GET',
-      url: `/api/v1/admin/orders/${orderB.id}`,
-      headers: { cookie: adminAuth.cookie },
-    });
-    const detailB = JSON.parse(detailBRes.body);
-    assert.equal(detailB.order.status, 'paid_verified');
-    assert.equal(detailB.reconciliations.length, 1);
-    assert.equal(detailB.reconciliations[0].id, originalReconciliationId);
-    assert.ok(
-      detailB.events.some(
-        (e) =>
-          e.metadata &&
-          e.metadata.action_type === 'reallocate_reconciliation' &&
-          e.metadata.reconciliation_id === originalReconciliationId &&
-          e.metadata.reallocated_from_order_id === orderA.id
-      ),
-      'Order B must record reallocate_reconciliation event linked to Order A and original reconciliation_id'
-    );
+    assert.equal(parseInt(dbRecCount.rows[0].count, 10), 1, 'Deposit identity and historical record remain intact');
   });
 
-  await t.test('7. Refunded/Annulled Deposit Reservation: Blocks Both Ordinary Verify and Reallocation (409)', async () => {
+  await t.test('7. Refunded/Annulled Deposit Reservation: Permanently Blocks Reuse in verify-payment (409)', async () => {
     const adminAuth = await loginOperator(app, 'op_admin_01', 'AdminPassword#2026!');
 
     await createSampleOrder(app, 'endometriosis', 'annulA');
@@ -765,44 +667,44 @@ test('Gate 2-A3-A1 — Assisted Commercial Operations, Reconciliation & RBAC Sui
       },
     });
     const verifyBody = JSON.parse(verifyRes.body);
-    const recId = verifyBody.reconciliation.id;
 
-    // Reverse paid_verified -> cancelled (refunded_or_annulled)
-    const revCancel = await app.inject({
+    const adminSession = {
+      academyId: 'dr-sevilla',
+      operatorId: 'op_admin_01',
+      role: 'academy_admin',
+    };
+    await app.adminOperationsService.reverseOrderState(adminSession, orderA.id, {
+      target_status: 'cancelled',
+      corrected_event_id: verifyBody.event.id,
+      reversal_compensation_ref: 'DEV-BNB-2026-551',
+      reason: 'Devolución bancaria ejecutada a solicitud de la compradora',
+      idempotency_key: crypto.randomUUID(),
+    });
+
+    // Attempting to reuse a refunded_or_annulled bank_reference on Order B via verify-payment must fail with 409
+    const reuseRefundedRes = await app.inject({
       method: 'POST',
-      url: `/api/v1/admin/orders/${orderA.id}/reverse`,
+      url: `/api/v1/admin/orders/${orderB.id}/verify-payment`,
       headers: {
         cookie: adminAuth.cookie,
         'x-csrf-token': adminAuth.csrfToken,
       },
       payload: {
-        target_status: 'cancelled',
-        corrected_event_id: verifyBody.event.id,
-        reversal_compensation_ref: 'DEV-BNB-2026-551',
-        reason: 'Devolución bancaria ejecutada a solicitud de la compradora',
+        reconciliation_mode: 'standard_reference',
+        bank_reference: 'BNB-REFUND-99001',
+        reconciliation_evidence: 'Intento de reutilizar referencia anulada',
+        recipient_account_id: 'BNB-DR-SEVILLA-BOB-01',
+        recipient_account_verified: true,
+        effective_transaction_verified: true,
+        verified_amount_minor: 7900,
+        verified_currency: 'BOB',
+        bank_credit_at: new Date().toISOString(),
+        reason: 'Intento inválido de reutilizar un abono ya devuelto',
         idempotency_key: crypto.randomUUID(),
       },
     });
-    assert.equal(revCancel.statusCode, 200);
-    assert.equal(JSON.parse(revCancel.body).reconciliation.settlement_status, 'refunded_or_annulled');
-
-    // Attempting to reallocate a refunded_or_annulled reconciliation to Order B must fail with 409
-    const reallocateRefunded = await app.inject({
-      method: 'POST',
-      url: `/api/v1/admin/orders/${orderB.id}/reallocate-reconciliation`,
-      headers: {
-        cookie: adminAuth.cookie,
-        'x-csrf-token': adminAuth.csrfToken,
-      },
-      payload: {
-        reconciliation_id: recId,
-        reallocated_from_order_id: orderA.id,
-        reason: 'Intento inválido de reimputar un abono ya devuelto',
-        idempotency_key: crypto.randomUUID(),
-      },
-    });
-    assert.equal(reallocateRefunded.statusCode, 409);
-    assert.equal(JSON.parse(reallocateRefunded.body).error, 'RECONCILIATION_NOT_REALLOCATABLE');
+    assert.equal(reuseRefundedRes.statusCode, 409);
+    assert.equal(JSON.parse(reuseRefundedRes.body).error, 'DUPLICATE_BANK_REFERENCE');
   });
 
   await t.test('8. Manual Moodle Enrollment: Pack Requires All 4 Verified Courses & Marks Provisional Terms', async () => {

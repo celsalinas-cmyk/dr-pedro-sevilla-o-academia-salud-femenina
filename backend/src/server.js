@@ -262,36 +262,6 @@ export async function buildApp(customDb = db, opts = {}) {
     return reply.code(result.statusCode).send(result);
   });
 
-  // POST /api/v1/admin/orders/:order_id/verify-late-payment (T-06)
-  app.post('/api/v1/admin/orders/:order_id/verify-late-payment', async (request, reply) => {
-    const session = await adminAuthService.authenticateRequest(request, {
-      requireCsrf: true,
-      allowedRoles: [ADMIN_ROLES.ACADEMY_ADMIN],
-      checkSpoofing: true,
-    });
-    const result = await adminOperationsService.verifyLatePayment(
-      session,
-      request.params.order_id,
-      request.body || {}
-    );
-    return reply.code(result.statusCode).send(result);
-  });
-
-  // POST /api/v1/admin/orders/:order_id/reallocate-reconciliation (T-09)
-  app.post('/api/v1/admin/orders/:order_id/reallocate-reconciliation', async (request, reply) => {
-    const session = await adminAuthService.authenticateRequest(request, {
-      requireCsrf: true,
-      allowedRoles: [ADMIN_ROLES.ACADEMY_ADMIN],
-      checkSpoofing: true,
-    });
-    const result = await adminOperationsService.reallocateReconciliation(
-      session,
-      request.params.order_id,
-      request.body || {}
-    );
-    return reply.code(result.statusCode).send(result);
-  });
-
   // POST /api/v1/admin/orders/:order_id/start-enrollment (T-03)
   app.post('/api/v1/admin/orders/:order_id/start-enrollment', async (request, reply) => {
     const session = await adminAuthService.authenticateRequest(request, {
@@ -330,21 +300,6 @@ export async function buildApp(customDb = db, opts = {}) {
       checkSpoofing: true,
     });
     const result = await adminOperationsService.cancelOrder(
-      session,
-      request.params.order_id,
-      request.body || {}
-    );
-    return reply.code(result.statusCode).send(result);
-  });
-
-  // POST /api/v1/admin/orders/:order_id/reverse (T-08)
-  app.post('/api/v1/admin/orders/:order_id/reverse', async (request, reply) => {
-    const session = await adminAuthService.authenticateRequest(request, {
-      requireCsrf: true,
-      allowedRoles: [ADMIN_ROLES.ACADEMY_ADMIN],
-      checkSpoofing: true,
-    });
-    const result = await adminOperationsService.reverseOrderState(
       session,
       request.params.order_id,
       request.body || {}

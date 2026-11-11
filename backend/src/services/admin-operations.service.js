@@ -427,18 +427,13 @@ export class AdminOperationsService {
       throw err;
     }
 
-    const mode = input.reconciliation_mode;
-    if (mode !== 'standard_reference' && mode !== 'manual_resolution') {
-      const err = new Error("reconciliation_mode must be 'standard_reference' or 'manual_resolution'.");
+    const mode = input.reconciliation_mode || 'standard_reference';
+    if (mode !== 'standard_reference') {
+      const err = new Error(
+        "reconciliation_mode must be 'standard_reference' in the MVP. Advanced manual_resolution exceptions are postponed."
+      );
       err.statusCode = 422;
       err.code = 'VALIDATION_ERROR';
-      throw err;
-    }
-
-    if (mode === 'manual_resolution' && session.role !== 'academy_admin') {
-      const err = new Error('Ambiguous or reference-less bank reconciliations require academy_admin resolution.');
-      err.statusCode = 403;
-      err.code = 'MANUAL_RESOLUTION_REQUIRES_ADMIN';
       throw err;
     }
 
