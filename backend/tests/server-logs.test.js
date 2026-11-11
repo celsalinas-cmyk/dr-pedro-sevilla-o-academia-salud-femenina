@@ -146,4 +146,40 @@ test('Server Log Sanitization & Sentinel Absence Suite (P1 Control)', async (t) 
       'Must log static message without raw error message or user data'
     );
   });
+
+  await t.test('4. Gate 2-A3-A1 Admin Routes: Passwords, Session Tokens, CSRF & Bank References Never Leak to Logs', async () => {
+    const passwordSentinel = 'SUPER_SECRET_PASSWORD_SENTINEL_999';
+    const tokenSentinel = 'aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222';
+    const orderIdSentinel = '99999999-8888-4777-8666-555555555555';
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/session/login',
+      payload: {
+        operator_id: 'op_sentinel_user',
+        password: passwordSentinel,
+      },
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/orders/${orderIdSentinel}/verify-payment`,
+      headers: {
+        authorization: `Bearer ${tokenSentinel}`,
+      },
+      payload: {
+        bank_reference: 'SECRET_BANK_REF_SENTINEL',
+      },
+    });
+
+    const logOutput = capturedLogs.join('\n');
+    assert.equal(logOutput.includes(passwordSentinel), false, 'Admin password sentinel must never appear in logs');
+    assert.equal(logOutput.includes(tokenSentinel), false, 'Admin session token sentinel must never appear in logs');
+    assert.equal(logOutput.includes(orderIdSentinel), false, 'Admin order_id path param must never appear in logs');
+    assert.equal(logOutput.includes('SECRET_BANK_REF_SENTINEL'), false, 'Bank reference sentinel must never appear in logs');
+    assert.ok(
+      logOutput.includes('"route":"/api/v1/admin/orders/:order_id/verify-payment"'),
+      'Must log sanitized router template for admin route'
+    );
+  });
 });

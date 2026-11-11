@@ -4,6 +4,8 @@ import rateLimit from '@fastify/rate-limit';
 import { config } from './config.js';
 import { db } from './db/pool.js';
 import { CheckoutService } from './services/checkout.service.js';
+import { AdminAuthService, ADMIN_ROLES } from './services/admin-auth.service.js';
+import { AdminOperationsService } from './services/admin-operations.service.js';
 
 export async function buildApp(customDb = db, opts = {}) {
   // Determine trusted proxies: false by default in local/dev; or explicit list of proxy IPs in production
@@ -77,14 +79,20 @@ export async function buildApp(customDb = db, opts = {}) {
     })
   });
 
+  const academyId = opts.academyId || config.defaultAcademyId;
+  const allowedOrigins = opts.allowedOrigins || config.allowedOrigins;
+
   // CORS Configuration
   await app.register(cors, {
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
-      if (config.allowedOrigins.includes(origin)) {
+      if (allowedOrigins.includes(origin)) {
         return cb(null, true);
       }
-      return cb(new Error('Not allowed by CORS'), false);
+      const corsErr = new Error('Not allowed by CORS');
+      corsErr.statusCode = 403;
+      corsErr.code = 'ORIGIN_NOT_ALLOWED';
+      return cb(corsErr, false);
     },
     methods: ['GET', 'POST', 'OPTIONS'],
     credentials: true,
@@ -137,11 +145,23 @@ export async function buildApp(customDb = db, opts = {}) {
     });
   });
 
-  const checkoutService = new CheckoutService(customDb, config.defaultAcademyId);
+  const checkoutService = new CheckoutService(customDb, academyId);
+  const adminAuthService = new AdminAuthService(customDb, academyId, allowedOrigins);
+  const adminOperationsService = new AdminOperationsService(customDb, academyId);
+
+  app.decorate('adminAuthService', adminAuthService);
+  app.decorate('adminOperationsService', adminOperationsService);
+  app.decorate('checkoutService', checkoutService);
+
+  const ALL_ADMIN_ROLES = [
+    ADMIN_ROLES.ACADEMIC_OPERATOR,
+    ADMIN_ROLES.FINANCE_VERIFIER,
+    ADMIN_ROLES.ACADEMY_ADMIN,
+  ];
 
   // Health check endpoint
   app.get('/health', async () => {
-    return { status: 'healthy', academy: config.defaultAcademyId };
+    return { status: 'healthy', academy: academyId };
   });
 
   // POST /api/v1/checkout
@@ -158,6 +178,133 @@ export async function buildApp(customDb = db, opts = {}) {
     const { opaque_token } = request.params;
     const order = await checkoutService.getOrderStatus(opaque_token);
     return reply.send(order);
+  });
+
+  // =========================================================================
+  // ADMINISTRATIVE ASSISTED COMMERCE ENDPOINTS (Gate 2-A3-A1)
+  // =========================================================================
+
+  // POST /api/v1/admin/session/login
+  app.post('/api/v1/admin/session/login', async (request, reply) => {
+    const result = await adminAuthService.login(request.body || {});
+    reply.header('Set-Cookie', adminAuthService.formatSessionCookie(result.rawToken));
+    return reply.code(200).send({
+      session: result.operator,
+      csrf_token: result.csrfToken,
+      expires_at: result.expiresAt,
+    });
+  });
+
+  // POST /api/v1/admin/session/logout
+  app.post('/api/v1/admin/session/logout', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: true,
+      allowedRoles: ALL_ADMIN_ROLES,
+      checkSpoofing: true,
+    });
+    await adminAuthService.logout(session.rawToken, 'operator_logout');
+    reply.header('Set-Cookie', adminAuthService.formatClearSessionCookie());
+    return reply.code(200).send({
+      revoked: true,
+      operator_id: session.operatorId,
+    });
+  });
+
+  // GET /api/v1/admin/orders
+  app.get('/api/v1/admin/orders', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: false,
+      allowedRoles: ALL_ADMIN_ROLES,
+      checkSpoofing: true,
+    });
+    const result = await adminOperationsService.listOrders(session, request.query || {});
+    return reply.code(200).send(result);
+  });
+
+  // GET /api/v1/admin/orders/:order_id
+  app.get('/api/v1/admin/orders/:order_id', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: false,
+      allowedRoles: ALL_ADMIN_ROLES,
+      checkSpoofing: true,
+    });
+    const result = await adminOperationsService.getOrderDetail(session, request.params.order_id);
+    return reply.code(200).send(result);
+  });
+
+  // POST /api/v1/admin/orders/:order_id/coordination (T-01)
+  app.post('/api/v1/admin/orders/:order_id/coordination', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: true,
+      allowedRoles: ALL_ADMIN_ROLES,
+      checkSpoofing: true,
+    });
+    const result = await adminOperationsService.recordCoordinationEvent(
+      session,
+      request.params.order_id,
+      request.body || {}
+    );
+    return reply.code(result.statusCode).send(result);
+  });
+
+  // POST /api/v1/admin/orders/:order_id/verify-payment (T-02)
+  app.post('/api/v1/admin/orders/:order_id/verify-payment', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: true,
+      allowedRoles: [ADMIN_ROLES.FINANCE_VERIFIER, ADMIN_ROLES.ACADEMY_ADMIN],
+      checkSpoofing: true,
+    });
+    const result = await adminOperationsService.verifyPayment(
+      session,
+      request.params.order_id,
+      request.body || {}
+    );
+    return reply.code(result.statusCode).send(result);
+  });
+
+  // POST /api/v1/admin/orders/:order_id/start-enrollment (T-03)
+  app.post('/api/v1/admin/orders/:order_id/start-enrollment', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: true,
+      allowedRoles: [ADMIN_ROLES.ACADEMIC_OPERATOR, ADMIN_ROLES.ACADEMY_ADMIN],
+      checkSpoofing: true,
+    });
+    const result = await adminOperationsService.startEnrollment(
+      session,
+      request.params.order_id,
+      request.body || {}
+    );
+    return reply.code(result.statusCode).send(result);
+  });
+
+  // POST /api/v1/admin/orders/:order_id/confirm-enrollment (T-04)
+  app.post('/api/v1/admin/orders/:order_id/confirm-enrollment', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: true,
+      allowedRoles: [ADMIN_ROLES.ACADEMIC_OPERATOR, ADMIN_ROLES.ACADEMY_ADMIN],
+      checkSpoofing: true,
+    });
+    const result = await adminOperationsService.confirmEnrollment(
+      session,
+      request.params.order_id,
+      request.body || {}
+    );
+    return reply.code(result.statusCode).send(result);
+  });
+
+  // POST /api/v1/admin/orders/:order_id/cancel (T-07)
+  app.post('/api/v1/admin/orders/:order_id/cancel', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: true,
+      allowedRoles: ALL_ADMIN_ROLES,
+      checkSpoofing: true,
+    });
+    const result = await adminOperationsService.cancelOrder(
+      session,
+      request.params.order_id,
+      request.body || {}
+    );
+    return reply.code(result.statusCode).send(result);
   });
 
   return app;

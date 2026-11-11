@@ -495,66 +495,195 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
     assert.notEqual(untrustedPort, apiPort, 'Untrusted frontend and API must run on different ports');
     assert.notEqual(frontendPort, untrustedPort, 'Authorized and untrusted frontends must run on different ports');
 
-    // Launch Headless Chrome with stdio: 'ignore' so Linux crashpad daemons never hold pipes open
-    const debugPort = await getFreePort();
-    const userDataDir = fs.mkdtempSync('/tmp/novarum-chrome-e2e-');
-    const chromeProc = spawn(
-      chromeBin,
-      [
-        '--headless=new',
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-gpu',
-        '--disable-dev-shm-usage',
-        '--disable-crash-reporter',
-        '--disable-breakpad',
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-extensions',
-        '--disable-background-networking',
-        `--remote-debugging-port=${debugPort}`,
-        `--user-data-dir=${userDataDir}`,
-        `${frontendOrigin}/index.html?utm_source=tiktok&utm_campaign=gate2_e2e`,
-      ],
-      { stdio: 'ignore', detached: true }
+    const initialUrl = `${frontendOrigin}/index.html?utm_source=tiktok&utm_campaign=gate2_e2e`;
+
+    // Verify frontend servers are live and serving index.html before launching Headless Chrome
+    const preflightFrontendRes = await fetch(initialUrl);
+    assert.equal(preflightFrontendRes.status, 200, 'Authorized frontend server must be ready before Chrome launch');
+    const preflightFrontendHtml = await preflightFrontendRes.text();
+    assert.ok(preflightFrontendHtml.includes('id="checkout-modal"'), 'Frontend server must serve valid index.html');
+    assert.ok(
+      preflightFrontendHtml.includes(`content="${apiOrigin}"`),
+      'Frontend server must inject novarum-api-base meta tag'
     );
-    chromeProc.unref();
 
-    let pageWsUrl = null;
-    for (let i = 0; i < 80 && !pageWsUrl; i++) {
-      try {
-        const listRes = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
-        if (listRes.ok) {
-          const targets = await listRes.json();
-          const pageTarget = targets.find((tgt) => tgt.type === 'page' && tgt.url.includes('index.html'));
-          if (pageTarget && pageTarget.webSocketDebuggerUrl) {
-            pageWsUrl = pageTarget.webSocketDebuggerUrl;
-            break;
-          }
-        }
-      } catch (_) {}
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    assert.ok(pageWsUrl, 'Headless Chrome must have an active page target for index.html');
+    const preflightUntrustedRes = await fetch(`${untrustedOrigin}/index.html`);
+    assert.equal(preflightUntrustedRes.status, 200, 'Untrusted frontend server must be ready before Chrome launch');
 
-    const cdp = await connectCdpWebSocket(pageWsUrl);
-    await cdp.send('Page.enable');
-    await cdp.send('Runtime.enable');
+    let chromeProc = null;
+    let userDataDir = null;
+    let cdp = null;
 
-    async function waitForPageReady() {
-      for (let i = 0; i < 50; i++) {
+    async function waitForPageReady( expectedUrlSubstring = 'index.html') {
+      for (let i = 0; i < 120; i++) {
         try {
-          const ready = await cdp.evaluate('Boolean(window.NovarumCheckout && document.readyState === "complete")');
+          const ready = await cdp.evaluate(
+            `Boolean(window.location.href.includes(${JSON.stringify(expectedUrlSubstring)}) && window.NovarumCheckout && document.readyState === "complete")`
+          );
           if (ready) return;
         } catch (_) {}
         await new Promise((r) => setTimeout(r, 100));
       }
-      throw new Error('Timed out waiting for window.NovarumCheckout page readiness');
+      throw new Error(`Timed out waiting for window.NovarumCheckout page readiness (${expectedUrlSubstring})`);
     }
 
-    await waitForPageReady();
-
     try {
+      let pageWsUrl = null;
+      const headlessModes = ['--headless=new', '--headless=new', '--headless'];
+
+      for (let attempt = 0; attempt < headlessModes.length && !cdp; attempt++) {
+        const headlessFlag = headlessModes[attempt];
+        const debugPort = await getFreePort();
+        userDataDir = fs.mkdtempSync('/tmp/novarum-chrome-e2e-');
+
+        chromeProc = spawn(
+          chromeBin,
+          [
+            headlessFlag,
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--disable-dev-shm-usage',
+            '--disable-crash-reporter',
+            '--disable-breakpad',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--password-store=basic',
+            '--use-mock-keychain',
+            '--dbus-stub',
+            '--disable-features=dbus,OptimizationHints,MediaRouter,Translate',
+            '--remote-allow-origins=*',
+            `--remote-debugging-port=${debugPort}`,
+            `--user-data-dir=${userDataDir}`,
+            initialUrl,
+          ],
+          {
+            stdio: 'ignore',
+            detached: true,
+            env: {
+              ...process.env,
+              DBUS_SESSION_BUS_ADDRESS: '/dev/null',
+            },
+          }
+        );
+        chromeProc.unref();
+
+        let devtoolsReadyPolls = 0;
+        let createdTargetAttempted = false;
+
+        for (let i = 0; i < 150 && !pageWsUrl; i++) {
+          if (chromeProc.exitCode !== null) {
+            break;
+          }
+          try {
+            const listRes = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
+            if (listRes.ok) {
+              devtoolsReadyPolls += 1;
+              const targets = await listRes.json();
+
+              // 1. Prefer a page target already navigating/navigated to index.html
+              let pageTarget = targets.find(
+                (tgt) =>
+                  tgt.type === 'page' &&
+                  typeof tgt.url === 'string' &&
+                  tgt.url.includes('index.html') &&
+                  tgt.webSocketDebuggerUrl
+              );
+
+              // 2. If Chrome opened an initial blank/newtab page target and hasn't navigated after 10 polls (1s), attach to it
+              if (!pageTarget && devtoolsReadyPolls >= 10) {
+                pageTarget = targets.find((tgt) => tgt.type === 'page' && tgt.webSocketDebuggerUrl);
+              }
+
+              // 3. If Chrome started with zero page targets after 10 polls (1s), explicitly create one via DevTools HTTP or Browser CDP
+              if (!pageTarget && devtoolsReadyPolls >= 10 && !createdTargetAttempted) {
+                createdTargetAttempted = true;
+                try {
+                  const newRes = await fetch(
+                    `http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(initialUrl)}`,
+                    { method: 'PUT' }
+                  );
+                  if (newRes.ok) {
+                    const created = await newRes.json();
+                    if (created && created.webSocketDebuggerUrl) {
+                      pageTarget = created;
+                    }
+                  }
+                } catch (_) {}
+
+                if (!pageTarget) {
+                  try {
+                    const verRes = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
+                    if (verRes.ok) {
+                      const verInfo = await verRes.json();
+                      if (verInfo && verInfo.webSocketDebuggerUrl) {
+                        const browserCdp = await connectCdpWebSocket(verInfo.webSocketDebuggerUrl);
+                        await browserCdp.send('Target.createTarget', { url: initialUrl });
+                        browserCdp.close();
+                      }
+                    }
+                  } catch (_) {}
+                }
+              }
+
+              if (pageTarget && pageTarget.webSocketDebuggerUrl) {
+                pageWsUrl = pageTarget.webSocketDebuggerUrl;
+                break;
+              }
+            }
+          } catch (_) {}
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
+        if (pageWsUrl) {
+          try {
+            cdp = await connectCdpWebSocket(pageWsUrl);
+            await cdp.send('Page.enable');
+            await cdp.send('Runtime.enable');
+
+            const currentHref = await cdp.evaluate('window.location.href');
+            if (!currentHref || !currentHref.includes('index.html?utm_source=tiktok&utm_campaign=gate2_e2e')) {
+              const navResult = await cdp.send('Page.navigate', { url: initialUrl });
+              if (navResult && navResult.errorText) {
+                throw new Error(`CDP Page.navigate error: ${navResult.errorText}`);
+              }
+            }
+
+            await waitForPageReady('index.html');
+          } catch (_) {
+            if (cdp) {
+              cdp.close();
+              cdp = null;
+            }
+            pageWsUrl = null;
+          }
+        }
+
+        if (!cdp) {
+          try {
+            process.kill(-chromeProc.pid, 'SIGKILL');
+          } catch (_) {}
+          try {
+            chromeProc.kill('SIGKILL');
+          } catch (_) {}
+          try {
+            fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+          } catch (_) {}
+          chromeProc = null;
+          userDataDir = null;
+        }
+      }
+
+      assert.ok(pageWsUrl && cdp, 'Headless Chrome must have an active page target for index.html');
+
+      const activePageHref = await cdp.evaluate('window.location.href');
+      assert.ok(
+        typeof activePageHref === 'string' && activePageHref.includes('index.html'),
+        'Active Headless Chrome target must have index.html loaded'
+      );
+
       // -----------------------------------------------------------------------
       // E2E 6.1: Accessibility, Focus Trap, Inert Background & Focus Return
       // -----------------------------------------------------------------------
@@ -572,7 +701,13 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
           btn.focus();
           btn.click();
         `);
-        await new Promise((r) => setTimeout(r, 50));
+        for (let i = 0; i < 20; i++) {
+          const focusedInside = await cdp.evaluate(
+            "Boolean(document.getElementById('checkout-modal') && document.getElementById('checkout-modal').contains(document.activeElement))"
+          );
+          if (focusedInside) break;
+          await new Promise((r) => setTimeout(r, 25));
+        }
 
         const modalA11yState = await cdp.evaluate(`({
           backdropHidden: document.getElementById('checkout-modal-backdrop').hidden,
@@ -667,7 +802,7 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         // Part A: Navigate to raw unconfigured index.html (?api_mode=unconfigured)
         // Verifies that without environment injection, NOVARUM_API_BASE is '' (no fictitious URL) and checkout is blocked
         await cdp.send('Page.navigate', { url: `${frontendOrigin}/index.html?api_mode=unconfigured` });
-        await waitForPageReady();
+        await waitForPageReady('api_mode=unconfigured');
 
         const defaultUnconfiguredState = await cdp.evaluate(`(async () => {
           const defaultRawBase = window.NOVARUM_API_BASE;
@@ -714,7 +849,7 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         // Browser will execute a real cross-origin OPTIONS preflight which Fastify CORS rejects!
         corsTrafficLog.length = 0;
         await cdp.send('Page.navigate', { url: `${untrustedOrigin}/index.html` });
-        await waitForPageReady();
+        await waitForPageReady(untrustedOrigin);
 
         const untrustedCorsAttempt = await cdp.evaluate(`(async () => {
           window.NovarumCheckout.openCheckout('sop');
@@ -757,7 +892,7 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
 
         // Navigate back to Authorized Frontend Origin (http://127.0.0.1:${frontendPort}) for subsequent tests
         await cdp.send('Page.navigate', { url: `${frontendOrigin}/index.html?utm_source=tiktok&utm_campaign=gate2_e2e` });
-        await waitForPageReady();
+        await waitForPageReady(`${frontendOrigin}/index.html?utm_source=tiktok`);
       });
 
       // -----------------------------------------------------------------------
@@ -1297,22 +1432,28 @@ test('Checkout UI & Commercial Flow Suite (Gate 2-A2 QA — Codex Hardened)', as
         assert.ok(mobileCheck.modalLeft >= 0 && mobileCheck.modalRight <= 360, 'Modal must fit strictly within 360px viewport');
       });
     } finally {
-      cdp.close();
-      try {
-        process.kill(-chromeProc.pid, 'SIGKILL');
-      } catch (_) {}
-      try {
-        chromeProc.kill('SIGKILL');
-      } catch (_) {}
+      if (cdp) {
+        cdp.close();
+      }
+      if (chromeProc) {
+        try {
+          process.kill(-chromeProc.pid, 'SIGKILL');
+        } catch (_) {}
+        try {
+          chromeProc.kill('SIGKILL');
+        } catch (_) {}
+      }
       for (const srv of [apiServer, frontendServer, untrustedFrontendServer]) {
         if (typeof srv.closeAllConnections === 'function') {
           srv.closeAllConnections();
         }
         await new Promise((resolve) => srv.close(resolve));
       }
-      try {
-        fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-      } catch (_) {}
+      if (userDataDir) {
+        try {
+          fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        } catch (_) {}
+      }
     }
   });
 });
