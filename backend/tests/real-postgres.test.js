@@ -18,7 +18,7 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
 
     // Ensure pristine test isolation: purge any residual transactional data
     await env.query(`
-      TRUNCATE TABLE payment_reconciliations, admin_sessions, admin_operators, order_events, order_items, orders, consents, leads CASCADE;
+      TRUNCATE TABLE social_inquiry_events, social_inquiries, payment_reconciliations, admin_sessions, admin_operators, order_events, order_items, orders, consents, leads CASCADE;
     `);
 
     service = new CheckoutService(env, 'dr-sevilla');
@@ -525,5 +525,154 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
     assert.equal(reallocRes.reconciliation.order_id, loserOrderId);
     assert.equal(reallocRes.reconciliation.reallocated_from_order_id, winnerOrderId);
     assert.equal(reallocRes.reconciliation.settlement_status, 'applied');
+  });
+
+  await t.test('9. Gate 2-A3-B1 Real PostgreSQL: Concurrent POST Race (Pool max=5), Rollback, Composite FKs & Immutability Trigger', async () => {
+    // Ensure TechPro academy exists alongside dr-sevilla
+    await env.query(`
+      INSERT INTO academies (id, slug, legal_name, default_currency, status, billing_entity)
+      VALUES ('techpro', 'techpro-academy', 'TechPro Academy', 'USD', 'active', 'TechPro Inc')
+      ON CONFLICT DO NOTHING;
+
+      INSERT INTO products (academy_id, sku, title, is_active, access_duration_days)
+      VALUES ('techpro', 'cloud-devops-pro', 'Curso: Cloud & DevOps Pro', TRUE, 365)
+      ON CONFLICT DO NOTHING;
+    `);
+
+    const adminSession = {
+      academyId: 'dr-sevilla',
+      operatorId: 'op_pg_admin',
+      role: 'academy_admin',
+    };
+
+    // 9a. Concurrency under pool max=5: 8 concurrent identical createInquiry calls with the same idempotency_key
+    // Must yield 1 created (201) and 7 idempotent replays (200) without any 500 errors or orphaned rows
+    const raceKey = crypto.randomUUID();
+    const racePayload = {
+      channel: 'whatsapp',
+      contact_name: 'Camila Rojas PG',
+      phone: '+59176543210',
+      email: 'camila.pg@ejemplo.com',
+      interested_sku: 'mujer-informada-4',
+      assigned_operator_id: 'op_pg_admin',
+      followup_status: 'contacted',
+      observation_category: 'payment_method_qr_inquiry',
+      notes: 'Consulta por formas de pago QR para el Pack Mujer Informada',
+      next_action: 'Enviar información de formas de pago y link al checkout oficial',
+      next_action_at: new Date(Date.now() + 3600000).toISOString(),
+      idempotency_key: raceKey,
+    };
+
+    const concurrentResults = await Promise.all(
+      Array.from({ length: 8 }, () => app.socialInquiriesService.createInquiry(adminSession, racePayload))
+    );
+
+    const createdList = concurrentResults.filter((r) => r.statusCode === 201 && !r.isIdempotentReplay);
+    const replayedList = concurrentResults.filter((r) => r.statusCode === 200 && r.isIdempotentReplay);
+
+    assert.equal(createdList.length, 1, 'Exactly 1 concurrent call must return 201 Created');
+    assert.equal(replayedList.length, 7, 'Exactly 7 concurrent calls must return 200 OK replay');
+
+    const createdInquiry = createdList[0].inquiry;
+    const eventId = createdList[0].event.id;
+
+    for (const rep of replayedList) {
+      assert.equal(rep.inquiry.id, createdInquiry.id);
+    }
+
+    const dbCountRes = await env.query(
+      `SELECT count(*) FROM social_inquiries WHERE academy_id = 'dr-sevilla' AND idempotency_key = $1`,
+      [raceKey]
+    );
+    assert.equal(parseInt(dbCountRes.rows[0].count, 10), 1, 'Must persist exactly 1 row in social_inquiries');
+
+    // Incompatible payload with same raceKey -> 409 IDEMPOTENCY_PAYLOAD_MISMATCH
+    await assert.rejects(
+      async () => {
+        await app.socialInquiriesService.createInquiry(adminSession, {
+          ...racePayload,
+          notes: 'Consulta diferente sobre horarios de curso en Moodle',
+        });
+      },
+      (err) => {
+        assert.equal(err.statusCode, 409);
+        assert.equal(err.code, 'IDEMPOTENCY_PAYLOAD_MISMATCH');
+        return true;
+      }
+    );
+
+    // 9b. Rollback verification: injected failure before COMMIT leaves zero rows in social_inquiries and social_inquiry_events
+    const rollbackKey = crypto.randomUUID();
+    await assert.rejects(
+      async () => {
+        await app.socialInquiriesService.createInquiry(
+          adminSession,
+          {
+            ...racePayload,
+            idempotency_key: rollbackKey,
+          },
+          { injectFailureBeforeCommit: true }
+        );
+      },
+      (err) => {
+        assert.equal(err.message, 'INJECTED_TRANSACTION_FAILURE_BEFORE_COMMIT');
+        return true;
+      }
+    );
+
+    const rollbackCheck = await env.query(
+      `SELECT count(*) FROM social_inquiries WHERE academy_id = 'dr-sevilla' AND idempotency_key = $1`,
+      [rollbackKey]
+    );
+    assert.equal(parseInt(rollbackCheck.rows[0].count, 10), 0, 'Rolled back inquiry must not persist');
+
+    // 9c. Verify PostgreSQL trigger trg_social_inquiry_events_immutable blocks UPDATE and DELETE
+    await assert.rejects(
+      async () => {
+        await env.query(`UPDATE social_inquiry_events SET notes = 'Tampered note' WHERE id = $1`, [eventId]);
+      },
+      (err) => {
+        assert.equal(err.code, '55000', 'PostgreSQL trigger must reject UPDATE on social_inquiry_events');
+        assert.ok(err.message.includes('SOCIAL_INQUIRY_EVENTS_IMMUTABLE'));
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      async () => {
+        await env.query(`DELETE FROM social_inquiry_events WHERE id = $1`, [eventId]);
+      },
+      (err) => {
+        assert.equal(err.code, '55000', 'PostgreSQL trigger must reject DELETE on social_inquiry_events');
+        assert.ok(err.message.includes('SOCIAL_INQUIRY_EVENTS_IMMUTABLE'));
+        return true;
+      }
+    );
+
+    // 9d. Verify Composite FK blocks cross-academy SKU insertion at PostgreSQL level
+    await assert.rejects(
+      async () => {
+        await env.query(
+          `INSERT INTO social_inquiries (
+             id, academy_id, channel, contact_name, phone,
+             interested_sku, followup_status, next_action, created_by_operator_id, updated_by_operator_id,
+             idempotency_key, payload_hash
+           ) VALUES ($1, 'dr-sevilla', 'instagram', 'Cross SKU PG', '+59170009999',
+             'cloud-devops-pro', 'new_inquiry', 'Cross academy SKU test', 'op_pg_admin', 'op_pg_admin', $2, 'hash_pg')`,
+          [crypto.randomUUID(), crypto.randomUUID()]
+        );
+      },
+      (err) => {
+        assert.equal(err.code, '23503', 'Composite FK fk_social_inquiries_product must reject cross-academy SKU');
+        return true;
+      }
+    );
+
+    // 9e. Verify 005_social_inquiries_followup.sql is recorded in schema_migrations and re-running migrations is idempotent
+    await runMigrations(env);
+    const mig005Check = await env.query(
+      `SELECT 1 FROM schema_migrations WHERE version = '005_social_inquiries_followup.sql'`
+    );
+    assert.equal(mig005Check.rows.length, 1, '005_social_inquiries_followup.sql must be recorded in schema_migrations');
   });
 });

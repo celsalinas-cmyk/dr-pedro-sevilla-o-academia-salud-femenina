@@ -13,6 +13,7 @@ on:
       - feature/gate2-commerce-core
       - feature/gate2-a2-checkout-ui
       - feature/gate2-a3-a1-admin-core
+      - feature/gate2-a3-b1-social-inquiries-crm
 
 jobs:
   test-linux:
