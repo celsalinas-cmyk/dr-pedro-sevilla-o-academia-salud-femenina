@@ -13,6 +13,32 @@ CREATE TABLE IF NOT EXISTS social_inquiries (
     contact_handle VARCHAR(128),
     email_normalized VARCHAR(255),
     phone VARCHAR(32),
+    contact_basis VARCHAR(48) NOT NULL DEFAULT 'inbound_user_message' CHECK (
+        contact_basis IN (
+            'inbound_user_message',
+            'explicit_opt_in',
+            'checkout_form_submission',
+            'no_outbound_permission',
+            'opt_out_revoked'
+        )
+    ),
+    contact_basis_evidence VARCHAR(180),
+    outbound_contact_allowed BOOLEAN NOT NULL DEFAULT TRUE,
+    observation_category VARCHAR(48) NOT NULL DEFAULT 'course_info_requested' CHECK (
+        observation_category IN (
+            'course_info_requested',
+            'pricing_and_pack_comparison',
+            'payment_method_qr_inquiry',
+            'checkout_link_dispatched',
+            'awaiting_prospect_reply',
+            'order_created_in_checkout',
+            'payment_verification_pending',
+            'moodle_enrollment_completed',
+            'no_response_or_postponed',
+            'do_not_contact_requested'
+        )
+    ),
+    notes VARCHAR(180),
     utm_source VARCHAR(100),
     utm_medium VARCHAR(100),
     utm_campaign VARCHAR(100),
@@ -25,11 +51,12 @@ CREATE TABLE IF NOT EXISTS social_inquiries (
             'order_created',
             'paid_verified',
             'enrolled',
-            'closed_no_conversion'
+            'closed_no_conversion',
+            'do_not_contact'
         )
     ),
     last_interaction_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    next_action VARCHAR(255),
+    next_action VARCHAR(180),
     next_action_at TIMESTAMPTZ,
     linked_order_id UUID,
     order_linked_by_operator_id VARCHAR(64),
@@ -40,14 +67,12 @@ CREATE TABLE IF NOT EXISTS social_inquiries (
     updated_by_operator_id VARCHAR(64) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (academy_id, id),
+    CONSTRAINT uq_social_inquiries_academy_id UNIQUE (academy_id, id),
+    CONSTRAINT uq_social_inquiries_academy_idempotency UNIQUE (academy_id, idempotency_key),
     FOREIGN KEY (academy_id, interested_sku) REFERENCES products(academy_id, sku) ON DELETE RESTRICT,
     FOREIGN KEY (academy_id, assigned_operator_id) REFERENCES admin_operators(academy_id, operator_id) ON DELETE RESTRICT,
     FOREIGN KEY (academy_id, linked_order_id) REFERENCES orders(academy_id, id) ON DELETE RESTRICT
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_social_inquiries_academy_idempotency
-ON social_inquiries (academy_id, idempotency_key);
 
 CREATE INDEX IF NOT EXISTS idx_social_inquiries_queue
 ON social_inquiries (academy_id, followup_status, next_action_at ASC, created_at DESC);
@@ -68,7 +93,7 @@ CREATE TABLE IF NOT EXISTS social_inquiry_events (
     previous_followup_status VARCHAR(32),
     new_followup_status VARCHAR(32) NOT NULL,
     operator_id VARCHAR(64) NOT NULL,
-    notes VARCHAR(500),
+    notes VARCHAR(180),
     metadata JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     FOREIGN KEY (academy_id, inquiry_id) REFERENCES social_inquiries(academy_id, id) ON DELETE RESTRICT
