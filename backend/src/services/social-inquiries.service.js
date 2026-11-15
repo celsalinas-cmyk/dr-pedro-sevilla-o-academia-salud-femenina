@@ -1411,9 +1411,7 @@ export class SocialInquiriesService {
           : current.contact_basis_evidence,
         outboundContactAllowed: hasOwn(input, 'outbound_contact_allowed')
           ? input.outbound_contact_allowed
-          : hasOwn(input, 'contact_basis') || hasOwn(input, 'followup_status') || hasOwn(input, 'observation_category')
-            ? undefined
-            : current.outbound_contact_allowed,
+          : current.outbound_contact_allowed,
         observationCategory: hasOwn(input, 'observation_category')
           ? input.observation_category
           : current.observation_category,

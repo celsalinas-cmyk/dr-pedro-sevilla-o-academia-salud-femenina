@@ -396,7 +396,75 @@ test('Gate 2-A3-B1 — Mini CRM Social Inquiries & Follow-up Suite', async (t) =
     assert.equal(illegalOutboundPatchRes.statusCode, 409);
     assert.equal(JSON.parse(illegalOutboundPatchRes.body).error, 'OUTBOUND_CONTACT_PROHIBITED');
 
-    // 3e. Missing all contact channels (no phone, email, or contact_handle) -> 422 CONTACT_METHOD_REQUIRED
+    // 3e. Inquiries with outbound_contact_allowed=false MUST preserve false across any category or status change
+    const revokedConsentInqRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/inquiries',
+      headers: authHeaders(academicAuth),
+      payload: {
+        channel: 'whatsapp',
+        contact_name: 'Prospecto Permiso Falso',
+        phone: '+59170099887',
+        interested_sku: 'endometriosis',
+        contact_basis: 'inbound_user_message',
+        outbound_contact_allowed: false,
+        observation_category: 'course_info_requested',
+        followup_status: 'new_inquiry',
+        notes: 'Prospecto consulta pero solicita expresamente no recibir llamadas ni mensajes salientes',
+        idempotency_key: crypto.randomUUID(),
+      },
+    });
+    assert.equal(revokedConsentInqRes.statusCode, 201);
+    const revokedConsentInq = JSON.parse(revokedConsentInqRes.body).inquiry;
+    assert.equal(revokedConsentInq.outbound_contact_allowed, false);
+
+    // PATCH changing observation_category without outbound_contact_allowed: MUST remain false
+    const patchCategoryRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/inquiries/${revokedConsentInq.id}`,
+      headers: authHeaders(academicAuth),
+      payload: {
+        observation_category: 'pricing_and_pack_comparison',
+        notes: 'Prospecto vuelve a preguntar precio del pack completo pero permiso saliente sigue inactivo',
+        idempotency_key: crypto.randomUUID(),
+      },
+    });
+    assert.equal(patchCategoryRes.statusCode, 200);
+    const patchedCategoryInq = JSON.parse(patchCategoryRes.body).inquiry;
+    assert.equal(patchedCategoryInq.observation_category, 'pricing_and_pack_comparison');
+    assert.equal(patchedCategoryInq.outbound_contact_allowed, false, 'outbound_contact_allowed must remain false when category changes');
+
+    // PATCH changing followup_status: MUST still remain false
+    const patchStatusRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/inquiries/${revokedConsentInq.id}`,
+      headers: authHeaders(academicAuth),
+      payload: {
+        followup_status: 'closed_no_conversion',
+        observation_category: 'no_response_or_postponed',
+        notes: 'Se cierra seguimiento sin conversión manteniendo permiso de contacto en false',
+        idempotency_key: crypto.randomUUID(),
+      },
+    });
+    assert.equal(patchStatusRes.statusCode, 200);
+    const patchedStatusInq = JSON.parse(patchStatusRes.body).inquiry;
+    assert.equal(patchedStatusInq.followup_status, 'closed_no_conversion');
+    assert.equal(patchedStatusInq.outbound_contact_allowed, false, 'outbound_contact_allowed must remain false when status changes');
+
+    // Attempting to transition to contacted without outbound permission is blocked
+    const blockedOutboundRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/inquiries/${revokedConsentInq.id}`,
+      headers: authHeaders(academicAuth),
+      payload: {
+        followup_status: 'contacted',
+        idempotency_key: crypto.randomUUID(),
+      },
+    });
+    assert.equal(blockedOutboundRes.statusCode, 409);
+    assert.equal(JSON.parse(blockedOutboundRes.body).error, 'OUTBOUND_CONTACT_PROHIBITED');
+
+    // 3f. Missing all contact channels (no phone, email, or contact_handle) -> 422 CONTACT_METHOD_REQUIRED
     const noContactRes = await app.inject({
       method: 'POST',
       url: '/api/v1/admin/inquiries',
