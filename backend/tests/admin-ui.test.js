@@ -341,54 +341,169 @@ test('Gate 2-A3-B2 (BL-05) — Commercial Inbox UI & Operational Workflows Suite
     const apiPort = apiServer.address().port;
     apiOrigin = `http://127.0.0.1:${apiPort}`;
 
-    // Launch Chrome CDP
-    const cdpPort = await getFreePort();
-    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'novarum-chrome-admin-'));
-    const chromeProc = spawn(chromeBin, [
-      '--headless=new',
-      `--remote-debugging-port=${cdpPort}`,
-      '--remote-allow-origins=*',
-      '--no-sandbox',
-      '--disable-gpu',
-      '--disable-extensions',
-      '--disable-background-networking',
-      `--user-data-dir=${userDataDir}`,
-      'about:blank',
-    ]);
+    // Launch Chrome CDP with robust multi-mode Linux/macOS support
+    const initialUrl = `${frontendOrigin}/admin.html`;
+    let chromeProc = null;
+    let userDataDir = null;
+    let cdp = null;
 
-    let cdp;
     try {
-      // Poll CDP JSON version
-      let wsUrl = null;
-      for (let i = 0; i < 40; i++) {
-        await new Promise((r) => setTimeout(r, 100));
-        try {
-          const jsonRes = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
-          if (jsonRes.ok) {
-            const data = await jsonRes.json();
-            wsUrl = data.webSocketDebuggerUrl;
+      let pageWsUrl = null;
+      const headlessModes = ['--headless=new', '--headless=new', '--headless'];
+
+      for (let attempt = 0; attempt < headlessModes.length && !cdp; attempt++) {
+        const headlessFlag = headlessModes[attempt];
+        const debugPort = await getFreePort();
+        userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'novarum-chrome-admin-'));
+
+        chromeProc = spawn(
+          chromeBin,
+          [
+            headlessFlag,
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--disable-dev-shm-usage',
+            '--disable-crash-reporter',
+            '--disable-breakpad',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--password-store=basic',
+            '--use-mock-keychain',
+            '--dbus-stub',
+            '--disable-features=dbus,OptimizationHints,MediaRouter,Translate',
+            '--remote-allow-origins=*',
+            `--remote-debugging-port=${debugPort}`,
+            `--user-data-dir=${userDataDir}`,
+            initialUrl,
+          ],
+          {
+            stdio: 'ignore',
+            detached: true,
+            env: {
+              ...process.env,
+              DBUS_SESSION_BUS_ADDRESS: '/dev/null',
+            },
+          }
+        );
+        chromeProc.unref();
+
+        let devtoolsReadyPolls = 0;
+        let createdTargetAttempted = false;
+
+        for (let i = 0; i < 150 && !pageWsUrl; i++) {
+          if (chromeProc.exitCode !== null) {
             break;
           }
-        } catch {
-          // Keep polling
+          try {
+            const listRes = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
+            if (listRes.ok) {
+              devtoolsReadyPolls += 1;
+              const targets = await listRes.json();
+
+              let pageTarget = targets.find(
+                (tgt) =>
+                  tgt.type === 'page' &&
+                  typeof tgt.url === 'string' &&
+                  tgt.url.includes('admin.html') &&
+                  tgt.webSocketDebuggerUrl
+              );
+
+              if (!pageTarget && devtoolsReadyPolls >= 10) {
+                pageTarget = targets.find((tgt) => tgt.type === 'page' && tgt.webSocketDebuggerUrl);
+              }
+
+              if (!pageTarget && devtoolsReadyPolls >= 10 && !createdTargetAttempted) {
+                createdTargetAttempted = true;
+                try {
+                  const newRes = await fetch(
+                    `http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(initialUrl)}`,
+                    { method: 'PUT' }
+                  );
+                  if (newRes.ok) {
+                    const created = await newRes.json();
+                    if (created && created.webSocketDebuggerUrl) {
+                      pageTarget = created;
+                    }
+                  }
+                } catch (_) {}
+
+                if (!pageTarget) {
+                  try {
+                    const verRes = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
+                    if (verRes.ok) {
+                      const verInfo = await verRes.json();
+                      if (verInfo && verInfo.webSocketDebuggerUrl) {
+                        const browserCdp = await connectCdpWebSocket(verInfo.webSocketDebuggerUrl);
+                        await browserCdp.send('Target.createTarget', { url: initialUrl });
+                        browserCdp.close();
+                      }
+                    }
+                  } catch (_) {}
+                }
+              }
+
+              if (pageTarget && pageTarget.webSocketDebuggerUrl) {
+                pageWsUrl = pageTarget.webSocketDebuggerUrl;
+                break;
+              }
+            }
+          } catch (_) {}
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
+        if (pageWsUrl) {
+          try {
+            cdp = await connectCdpWebSocket(pageWsUrl);
+            await cdp.send('Page.enable');
+            await cdp.send('Runtime.enable');
+
+            const currentHref = await cdp.evaluate('window.location.href');
+            if (!currentHref || !currentHref.includes('admin.html')) {
+              const navResult = await cdp.send('Page.navigate', { url: initialUrl });
+              if (navResult && navResult.errorText) {
+                throw new Error(`CDP Page.navigate error: ${navResult.errorText}`);
+              }
+            }
+
+            for (let i = 0; i < 60; i++) {
+              try {
+                const ready = await cdp.evaluate(
+                  'Boolean(window.location.href.includes("admin.html") && window.NovarumAdmin && document.readyState === "complete")'
+                );
+                if (ready) break;
+              } catch (_) {}
+              await new Promise((r) => setTimeout(r, 100));
+            }
+          } catch (_) {
+            if (cdp) {
+              cdp.close();
+              cdp = null;
+            }
+            pageWsUrl = null;
+          }
+        }
+
+        if (!cdp) {
+          try {
+            process.kill(-chromeProc.pid, 'SIGKILL');
+          } catch (_) {}
+          try {
+            chromeProc.kill('SIGKILL');
+          } catch (_) {}
+          try {
+            fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+          } catch (_) {}
+          chromeProc = null;
+          userDataDir = null;
         }
       }
-      assert.ok(wsUrl, 'CDP WebSocket URL must be available from Chrome');
 
-      // Create browser target
-      const listRes = await fetch(`http://127.0.0.1:${cdpPort}/json/list`);
-      const targets = await listRes.json();
-      const pageTarget = targets.find((t) => t.type === 'page');
-      assert.ok(pageTarget, 'Page target must exist in Chrome');
+      assert.ok(pageWsUrl && cdp, 'Headless Chrome must have an active page target for admin.html');
 
-      cdp = await connectCdpWebSocket(pageTarget.webSocketDebuggerUrl);
-      await cdp.send('Page.enable');
-      await cdp.send('Runtime.enable');
-
-      // 1. Navigate to admin.html
-      await cdp.send('Page.navigate', { url: `${frontendOrigin}/admin.html` });
-      await new Promise((r) => setTimeout(r, 600));
-
+      // 1. Title verification
       const title = await cdp.evaluate('document.title');
       assert.ok(title.includes('NOVARUM'), `Page title must include NOVARUM, got: ${title}`);
 
@@ -600,8 +715,13 @@ test('Gate 2-A3-B2 (BL-05) — Commercial Inbox UI & Operational Workflows Suite
       assert.equal(isLoginViewBack, true, 'loginView must be restored after logout');
     } finally {
       if (cdp) cdp.close();
-      if (chromeProc && !chromeProc.killed) {
-        chromeProc.kill('SIGKILL');
+      if (chromeProc) {
+        try {
+          process.kill(-chromeProc.pid, 'SIGKILL');
+        } catch (_) {}
+        try {
+          chromeProc.kill('SIGKILL');
+        } catch (_) {}
       }
       if (userDataDir) {
         try {
