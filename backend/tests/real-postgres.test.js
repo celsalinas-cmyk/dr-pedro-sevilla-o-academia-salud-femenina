@@ -18,7 +18,7 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
 
     // Ensure pristine test isolation: purge any residual transactional data
     await env.query(`
-      TRUNCATE TABLE payment_reconciliations, admin_sessions, admin_operators, order_events, order_items, orders, consents, leads CASCADE;
+      TRUNCATE TABLE social_inquiry_events, social_inquiries, payment_reconciliations, admin_sessions, admin_operators, order_events, order_items, orders, consents, leads CASCADE;
     `);
 
     service = new CheckoutService(env, 'dr-sevilla');
@@ -525,5 +525,85 @@ test('Integration Suite on Real PostgreSQL (Port 54329)', async (t) => {
     assert.equal(reallocRes.reconciliation.order_id, loserOrderId);
     assert.equal(reallocRes.reconciliation.reallocated_from_order_id, winnerOrderId);
     assert.equal(reallocRes.reconciliation.settlement_status, 'applied');
+  });
+
+  await t.test('9. Gate 2-A3-B1 Real PostgreSQL: Social Inquiries Composite FKs, Immutability Trigger & Multi-Academy Isolation', async () => {
+    // Ensure TechPro academy exists alongside dr-sevilla
+    await env.query(`
+      INSERT INTO academies (id, slug, legal_name, default_currency, status, billing_entity)
+      VALUES ('techpro', 'techpro-academy', 'TechPro Academy', 'USD', 'active', 'TechPro Inc')
+      ON CONFLICT DO NOTHING;
+
+      INSERT INTO products (academy_id, sku, title, is_active, access_duration_days)
+      VALUES ('techpro', 'cloud-devops-pro', 'Curso: Cloud & DevOps Pro', TRUE, 365)
+      ON CONFLICT DO NOTHING;
+    `);
+
+    const adminSession = {
+      academyId: 'dr-sevilla',
+      operatorId: 'op_pg_admin',
+      role: 'academy_admin',
+    };
+
+    const createRes = await app.socialInquiriesService.createInquiry(adminSession, {
+      channel: 'whatsapp',
+      contact_name: 'Camila Rojas PG',
+      phone: '+59176543210',
+      email: 'camila.pg@ejemplo.com',
+      interested_sku: 'mujer-informada-4',
+      assigned_operator_id: 'op_pg_admin',
+      followup_status: 'contacted',
+      next_action: 'Enviar información de formas de pago y link al checkout oficial',
+      next_action_at: new Date(Date.now() + 3600000).toISOString(),
+      idempotency_key: crypto.randomUUID(),
+    });
+
+    assert.equal(createRes.statusCode, 201);
+    assert.equal(createRes.inquiry.academy_id, 'dr-sevilla');
+    assert.equal(createRes.inquiry.channel, 'whatsapp');
+
+    const eventId = createRes.event.id;
+
+    // 9a. Verify PostgreSQL trigger trg_social_inquiry_events_immutable blocks UPDATE and DELETE
+    await assert.rejects(
+      async () => {
+        await env.query(`UPDATE social_inquiry_events SET notes = 'Tampered note' WHERE id = $1`, [eventId]);
+      },
+      (err) => {
+        assert.equal(err.code, '55000', 'PostgreSQL trigger must reject UPDATE on social_inquiry_events');
+        assert.ok(err.message.includes('SOCIAL_INQUIRY_EVENTS_IMMUTABLE'));
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      async () => {
+        await env.query(`DELETE FROM social_inquiry_events WHERE id = $1`, [eventId]);
+      },
+      (err) => {
+        assert.equal(err.code, '55000', 'PostgreSQL trigger must reject DELETE on social_inquiry_events');
+        assert.ok(err.message.includes('SOCIAL_INQUIRY_EVENTS_IMMUTABLE'));
+        return true;
+      }
+    );
+
+    // 9b. Verify Composite FK blocks cross-academy SKU insertion at PostgreSQL level
+    await assert.rejects(
+      async () => {
+        await env.query(
+          `INSERT INTO social_inquiries (
+             id, academy_id, channel, contact_name, phone,
+             interested_sku, followup_status, next_action, created_by_operator_id, updated_by_operator_id,
+             idempotency_key, payload_hash
+           ) VALUES ($1, 'dr-sevilla', 'instagram', 'Cross SKU PG', '+59170009999',
+             'cloud-devops-pro', 'new_inquiry', 'Cross academy SKU test', 'op_pg_admin', 'op_pg_admin', $2, 'hash_pg')`,
+          [crypto.randomUUID(), crypto.randomUUID()]
+        );
+      },
+      (err) => {
+        assert.equal(err.code, '23503', 'Composite FK fk_social_inquiries_product must reject cross-academy SKU');
+        return true;
+      }
+    );
   });
 });

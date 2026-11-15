@@ -32,6 +32,13 @@ export async function createTestDatabase() {
     .replace(/DEFAULT gen_random_uuid\(\)/g, '');
   await pool.query(migration004);
 
+  // Apply incremental migration 005 for social inquiries follow-up mini CRM
+  let migration005 = fs.readFileSync(path.join(migrationsDir, '005_social_inquiries_followup.sql'), 'utf8');
+  migration005 = migration005
+    .split('-- 3. IMMUTABILITY TRIGGER')[0]
+    .replace(/DEFAULT gen_random_uuid\(\)/g, '');
+  await pool.query(migration005);
+
   // Register nextval function in pg-mem
   let seqCounter = 1000;
   pgMem.public.registerFunction({

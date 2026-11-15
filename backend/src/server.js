@@ -6,6 +6,7 @@ import { db } from './db/pool.js';
 import { CheckoutService } from './services/checkout.service.js';
 import { AdminAuthService, ADMIN_ROLES } from './services/admin-auth.service.js';
 import { AdminOperationsService } from './services/admin-operations.service.js';
+import { SocialInquiriesService } from './services/social-inquiries.service.js';
 
 export async function buildApp(customDb = db, opts = {}) {
   // Determine trusted proxies: false by default in local/dev; or explicit list of proxy IPs in production
@@ -94,7 +95,7 @@ export async function buildApp(customDb = db, opts = {}) {
       corsErr.code = 'ORIGIN_NOT_ALLOWED';
       return cb(corsErr, false);
     },
-    methods: ['GET', 'POST', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
     credentials: true,
   });
 
@@ -148,9 +149,11 @@ export async function buildApp(customDb = db, opts = {}) {
   const checkoutService = new CheckoutService(customDb, academyId);
   const adminAuthService = new AdminAuthService(customDb, academyId, allowedOrigins);
   const adminOperationsService = new AdminOperationsService(customDb, academyId);
+  const socialInquiriesService = new SocialInquiriesService(customDb, academyId);
 
   app.decorate('adminAuthService', adminAuthService);
   app.decorate('adminOperationsService', adminOperationsService);
+  app.decorate('socialInquiriesService', socialInquiriesService);
   app.decorate('checkoutService', checkoutService);
 
   const ALL_ADMIN_ROLES = [
@@ -302,6 +305,50 @@ export async function buildApp(customDb = db, opts = {}) {
     const result = await adminOperationsService.cancelOrder(
       session,
       request.params.order_id,
+      request.body || {}
+    );
+    return reply.code(result.statusCode).send(result);
+  });
+
+  // =========================================================================
+  // SOCIAL INQUIRIES & FOLLOW-UP MINI CRM ENDPOINTS (Incremento 1)
+  // =========================================================================
+
+  // GET /api/v1/admin/inquiries
+  app.get('/api/v1/admin/inquiries', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: false,
+      allowedRoles: ALL_ADMIN_ROLES,
+      checkSpoofing: true,
+    });
+    const result = await socialInquiriesService.listInquiries(session, request.query || {});
+    return reply.code(200).send(result);
+  });
+
+  // POST /api/v1/admin/inquiries
+  app.post('/api/v1/admin/inquiries', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: true,
+      allowedRoles: [ADMIN_ROLES.ACADEMIC_OPERATOR, ADMIN_ROLES.ACADEMY_ADMIN],
+      checkSpoofing: true,
+    });
+    const result = await socialInquiriesService.createInquiry(
+      session,
+      request.body || {}
+    );
+    return reply.code(result.statusCode).send(result);
+  });
+
+  // PATCH /api/v1/admin/inquiries/:inquiry_id
+  app.patch('/api/v1/admin/inquiries/:inquiry_id', async (request, reply) => {
+    const session = await adminAuthService.authenticateRequest(request, {
+      requireCsrf: true,
+      allowedRoles: [ADMIN_ROLES.ACADEMIC_OPERATOR, ADMIN_ROLES.ACADEMY_ADMIN],
+      checkSpoofing: true,
+    });
+    const result = await socialInquiriesService.updateInquiry(
+      session,
+      request.params.inquiry_id,
       request.body || {}
     );
     return reply.code(result.statusCode).send(result);
