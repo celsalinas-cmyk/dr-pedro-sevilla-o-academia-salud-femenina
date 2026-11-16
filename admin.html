@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NOVARUM — Bandeja Comercial y Operativa | Academia Mujer Sana</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/admin.css">
+</head>
+<body class="admin-body">
+    <!-- Top Bar / Header -->
+    <header class="admin-header" role="banner">
+        <div class="admin-header-container">
+            <div class="admin-brand">
+                <span class="admin-brand-novarum">NOVARUM</span>
+                <span class="admin-brand-divider">/</span>
+                <span class="admin-brand-client">Academia Mujer Sana</span>
+                <span class="admin-env-badge" id="envBadge" title="Ambiente operativo">dr-sevilla · Staging Operativo</span>
+            </div>
+            
+            <div class="admin-user-widget" id="userWidget" hidden>
+                <div class="admin-user-info">
+                    <span class="admin-user-name" id="operatorDisplayName">Operador</span>
+                    <span class="admin-role-badge" id="operatorRoleBadge">Operador Académico</span>
+                </div>
+                <button type="button" class="btn-logout" id="logoutBtn" title="Cerrar sesión segura">
+                    Cerrar Sesión
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Notification Toast Region -->
+    <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- Login View (When Unauthenticated) -->
+    <main id="loginView" class="admin-login-view" role="main">
+        <div class="login-card">
+            <div class="login-header">
+                <span class="login-badge">Acceso Nominal Autorizado</span>
+                <h1 class="login-title">Bandeja Comercial & Operativa</h1>
+                <p class="login-desc">Ingreso para personal autorizado de NOVARUM y Academia Mujer Sana. Conciliación humana y gestión de matrículas.</p>
+            </div>
+
+            <form id="loginForm" class="login-form" novalidate>
+                <div class="form-group">
+                    <label>Academia Operativa</label>
+                    <div style="font-size: 0.88rem; font-weight: 600; color: #475569; padding: 0.4rem 0;">dr-sevilla · Academia Mujer Sana</div>
+                </div>
+
+                <div class="form-group">
+                    <label for="loginOperatorId">Identificador de Operador (ID)</label>
+                    <input type="text" id="loginOperatorId" name="operator_id" placeholder="ej. op_academic_01" required autocomplete="username">
+                </div>
+
+                <div class="form-group">
+                    <label for="loginPassword">Contraseña Nominal</label>
+                    <input type="password" id="loginPassword" name="password" placeholder="••••••••••••" required autocomplete="current-password">
+                </div>
+
+                <div id="loginError" class="login-error-msg" hidden role="alert"></div>
+
+                <button type="submit" class="btn-primary-action btn-full" id="loginSubmitBtn">
+                    Iniciar Sesión Operativa
+                </button>
+            </form>
+
+            <div class="login-footer">
+                <p>Sesiones protegidas con HttpOnly, rotación revocable y verificación estricta CSRF.</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Main Operational Workspace (When Authenticated) -->
+    <main id="appWorkspace" class="admin-workspace" role="main" hidden>
+        <!-- Tab Navigation Navigation Bar -->
+        <nav class="admin-tabs-nav" aria-label="Secciones de la bandeja comercial">
+            <div class="tabs-container" role="tablist">
+                <button type="button" role="tab" id="tabInquiries" class="tab-btn active" aria-selected="true" aria-controls="panelInquiries">
+                    <span class="tab-icon">👥</span>
+                    <span class="tab-label">Prospectos & Redes Sociales</span>
+                    <span class="tab-counter" id="unattendedInquiriesBadge" hidden>0</span>
+                </button>
+                <button type="button" role="tab" id="tabOrders" class="tab-btn" aria-selected="false" aria-controls="panelOrders">
+                    <span class="tab-icon">📦</span>
+                    <span class="tab-label">Pedidos, Cobro & Matrícula</span>
+                    <span class="tab-counter" id="pendingOrdersBadge" hidden>0</span>
+                </button>
+            </div>
+        </nav>
+
+        <!-- ================================================================= -->
+        <!-- PANEL 1: PROSPECTOS Y SEGUIMIENTO OMNICANAL (MINI CRM)             -->
+        <!-- ================================================================= -->
+        <section id="panelInquiries" class="tab-panel active" role="tabpanel" aria-labelledby="tabInquiries">
+            <div class="panel-header">
+                <div class="panel-header-text">
+                    <h2 class="panel-title">Bandeja de Prospectos Omnicanal</h2>
+                    <p class="panel-subtitle">Prioridad operativa: consultas nuevas primero, seguimientos próximos y vencidos.</p>
+                </div>
+                <div class="panel-header-actions">
+                    <button type="button" class="btn-secondary-action" id="refreshInquiriesBtn" title="Actualizar lista de prospectos">
+                        ↻ Actualizar
+                    </button>
+                    <button type="button" class="btn-primary-action" id="openNewInquiryModalBtn">
+                        + Registrar Nuevo Interesado
+                    </button>
+                </div>
+            </div>
+
+            <!-- Filters Bar -->
+            <div class="filters-bar" role="search" aria-label="Filtros de prospectos">
+                <div class="filter-item">
+                    <label for="filterInquiryChannel">Canal</label>
+                    <select id="filterInquiryChannel">
+                        <option value="">Todos los canales</option>
+                        <option value="whatsapp">WhatsApp</option>
+                        <option value="instagram">Instagram</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="facebook">Facebook</option>
+                        <option value="web">Web</option>
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label for="filterInquirySku">Curso</label>
+                    <select id="filterInquirySku">
+                        <option value="">Todos los cursos</option>
+                        <option value="mujer-informada-4">Pack 4 Cursos (Bs 199)</option>
+                        <option value="endometriosis">Endometriosis (Bs 79)</option>
+                        <option value="vaginosis">Vaginosis (Bs 79)</option>
+                        <option value="sop">SOP (Bs 79)</option>
+                        <option value="aprende-mujer">Aprende Mujer (Bs 79)</option>
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label for="filterInquiryStatus">Estado de Seguimiento</label>
+                    <select id="filterInquiryStatus">
+                        <option value="">Todos los estados</option>
+                        <option value="new_inquiry">Nueva consulta (sin atender)</option>
+                        <option value="contacted">Contactado</option>
+                        <option value="checkout_link_sent">Link de checkout enviado</option>
+                        <option value="order_created">Pedido registrado</option>
+                        <option value="paid_verified">Pago verificado</option>
+                        <option value="enrolled">Matriculado</option>
+                        <option value="closed_no_conversion">Cerrado sin conversión</option>
+                        <option value="do_not_contact">No contactar / Revocado</option>
+                    </select>
+                </div>
+
+                <div class="filter-item filter-search">
+                    <label for="searchInquiryText">Buscar</label>
+                    <input type="search" id="searchInquiryText" placeholder="Nombre, teléfono, email o @handle...">
+                </div>
+            </div>
+
+            <!-- Inquiries Priority Summary Banner -->
+            <div class="priority-summary-bar" id="inquiriesSummaryBar">
+                <div class="summary-pill summary-unattended" id="summaryUnattended">
+                    <span class="pill-dot"></span>
+                    <span class="pill-text">0 sin atender</span>
+                </div>
+                <div class="summary-pill summary-active" id="summaryActive">
+                    <span class="pill-dot"></span>
+                    <span class="pill-text">0 en seguimiento activo</span>
+                </div>
+                <div class="summary-pill summary-enrolled" id="summaryEnrolled">
+                    <span class="pill-dot"></span>
+                    <span class="pill-text">0 matriculados</span>
+                </div>
+                <div class="summary-pill summary-closed" id="summaryClosed">
+                    <span class="pill-dot"></span>
+                    <span class="pill-text">0 cerrados</span>
+                </div>
+            </div>
+
+            <!-- Inquiries Data Table Container -->
+            <div class="table-card">
+                <div class="table-responsive">
+                    <table class="data-table" id="inquiriesTable">
+                        <thead>
+                            <tr>
+                                <th scope="col">Prioridad & Estado</th>
+                                <th scope="col">Prospecto / Contacto</th>
+                                <th scope="col">Curso de Interés</th>
+                                <th scope="col">Permiso Saliente</th>
+                                <th scope="col">Responsable & Próxima Acción</th>
+                                <th scope="col">Pedido Checkout</th>
+                                <th scope="col" class="th-actions">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inquiriesTableBody">
+                            <tr>
+                                <td colspan="7" class="td-empty">Cargando prospectos...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================================================================= -->
+        <!-- PANEL 2: PEDIDOS, COBRO Y MATRÍCULA                               -->
+        <!-- ================================================================= -->
+        <section id="panelOrders" class="tab-panel" role="tabpanel" aria-labelledby="tabOrders" hidden>
+            <div class="panel-header">
+                <div class="panel-header-text">
+                    <h2 class="panel-title">Bandeja de Pedidos & Matrículas Humanas</h2>
+                    <p class="panel-subtitle">Coordinación manual de QR bancario, verificación humana y habilitación en Moodle.</p>
+                </div>
+                <div class="panel-header-actions">
+                    <button type="button" class="btn-secondary-action" id="refreshOrdersBtn" title="Actualizar lista de pedidos">
+                        ↻ Actualizar
+                    </button>
+                </div>
+            </div>
+
+            <!-- Orders Filter Bar -->
+            <div class="filters-bar" role="search" aria-label="Filtros de pedidos">
+                <div class="filter-item">
+                    <label for="filterOrderStatus">Estado Comercial</label>
+                    <select id="filterOrderStatus">
+                        <option value="">Todos los pedidos</option>
+                        <option value="pending_payment">Pendiente de pago</option>
+                        <option value="paid_verified">Pago verificado (Listo para matrícula)</option>
+                        <option value="fulfilled">Matriculado / Cumplido</option>
+                        <option value="cancelled">Cancelado</option>
+                    </select>
+                </div>
+
+                <div class="filter-item filter-search">
+                    <label for="searchOrderText">Buscar Compradora / Pedido</label>
+                    <input type="search" id="searchOrderText" placeholder="N° pedido, nombre, email o teléfono...">
+                </div>
+            </div>
+
+            <!-- Orders Table Container -->
+            <div class="table-card">
+                <div class="table-responsive">
+                    <table class="data-table" id="ordersTable">
+                        <thead>
+                            <tr>
+                                <th scope="col">N° Pedido / Fecha</th>
+                                <th scope="col">Compradora</th>
+                                <th scope="col">Curso / Importe</th>
+                                <th scope="col">Cobro Bancario</th>
+                                <th scope="col">Matrícula Moodle</th>
+                                <th scope="col">Referencia Conciliación</th>
+                                <th scope="col" class="th-actions">Operación Asistida</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ordersTableBody">
+                            <tr>
+                                <td colspan="7" class="td-empty">Cargando pedidos...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ===================================================================== -->
+    <!-- MODAL 1: REGISTRAR NUEVO INTERESADO (POST /api/v1/admin/inquiries)   -->
+    <!-- ===================================================================== -->
+    <dialog id="newInquiryModal" class="admin-modal" aria-labelledby="newInquiryModalTitle">
+        <div class="modal-dialog-content">
+            <div class="modal-header">
+                <div>
+                    <h3 id="newInquiryModalTitle" class="modal-title">Registrar Nuevo Interesado</h3>
+                    <p class="modal-subtitle">Captación asistida desde redes sociales para Academia Mujer Sana.</p>
+                </div>
+                <button type="button" class="btn-close-modal" id="closeNewInquiryModalBtn" aria-label="Cerrar modal">✕</button>
+            </div>
+
+            <form id="newInquiryForm" class="modal-form" novalidate>
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label for="newInquiryChannel">Canal de Origen *</label>
+                        <select id="newInquiryChannel" name="channel" required>
+                            <option value="whatsapp">WhatsApp</option>
+                            <option value="instagram">Instagram</option>
+                            <option value="tiktok">TikTok</option>
+                            <option value="facebook">Facebook</option>
+                            <option value="web">Web</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group flex-2">
+                        <label for="newInquirySku">Curso de Interés *</label>
+                        <select id="newInquirySku" name="interested_sku" required>
+                            <option value="mujer-informada-4">Pack Completo: Mujer Informada (4 Cursos) — Bs 199</option>
+                            <option value="endometriosis">Endometriosis y Dolor Pélvico — Bs 79</option>
+                            <option value="vaginosis">Vaginosis Bacteriana y Flujo Vaginal — Bs 79</option>
+                            <option value="sop">Síndrome de Ovario Poliquístico (SOP) — Bs 79</option>
+                            <option value="aprende-mujer">Aprende Mujer: Microbiota y Bienestar — Bs 79</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label for="newInquiryName">Nombre o Alias de Contacto</label>
+                        <input type="text" id="newInquiryName" name="contact_name" placeholder="ej. Claudia Salinas">
+                    </div>
+
+                    <div class="form-group flex-1">
+                        <label for="newInquiryPhone">Teléfono / WhatsApp</label>
+                        <input type="tel" id="newInquiryPhone" name="phone" placeholder="+591 70012345">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label for="newInquiryEmail">Correo Electrónico</label>
+                        <input type="email" id="newInquiryEmail" name="email" placeholder="claudia@ejemplo.com">
+                    </div>
+
+                    <div class="form-group flex-1">
+                        <label for="newInquiryHandle">Usuario / Handle en Red Social</label>
+                        <input type="text" id="newInquiryHandle" name="contact_handle" placeholder="@claudia_salinas">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label for="newInquiryBasis">Base de Contacto</label>
+                        <select id="newInquiryBasis" name="contact_basis">
+                            <option value="inbound_user_message">Mensaje entrante del interesado (inbound)</option>
+                            <option value="inbound_comment">Comentario en publicación / post</option>
+                            <option value="inbound_direct_inquiry">Consulta directa por chat</option>
+                            <option value="explicit_opt_in">Consentimiento expreso verificado</option>
+                            <option value="no_outbound_permission">Sin autorización de contacto saliente</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group flex-1" id="basisEvidenceGroup" hidden>
+                        <label for="newInquiryEvidence">Evidencia de Consentimiento</label>
+                        <input type="text" id="newInquiryEvidence" name="contact_basis_evidence" placeholder="ID de ticket, captura o mensaje">
+                    </div>
+                </div>
+
+                <div class="form-group checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="newInquiryOutbound" name="outbound_contact_allowed" checked>
+                        <span><strong>Autoriza contacto saliente:</strong> El prospecto dio consentimiento para recibir mensajes o respuestas de seguimiento.</span>
+                    </label>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label for="newInquiryCategory">Categoría Comercial</label>
+                        <select id="newInquiryCategory" name="observation_category">
+                            <option value="course_info_requested">Solicitud de información sobre cursos</option>
+                            <option value="pricing_and_pack_comparison">Consulta de precios y pack completo</option>
+                            <option value="payment_method_qr_inquiry">Consulta de forma de pago QR bancario</option>
+                            <option value="awaiting_prospect_reply">Esperando respuesta del prospecto</option>
+                            <option value="no_response_or_postponed">Sin respuesta / Aplazó inscripción</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group flex-1">
+                        <label for="newInquiryNextAction">Próxima Acción Operativa</label>
+                        <input type="text" id="newInquiryNextAction" name="next_action" placeholder="ej. Enviar información del pack y QR">
+                    </div>
+
+                    <div class="form-group flex-1">
+                        <label for="newInquiryNextActionAt">Fecha / Hora Próxima Acción</label>
+                        <input type="datetime-local" id="newInquiryNextActionAt" name="next_action_at">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="newInquiryNotes">Observación Comercial Guiada</label>
+                    <textarea id="newInquiryNotes" name="notes" rows="2" placeholder="Notas sobre interés del curso, modalidad, dudas de horario o medio de pago..."></textarea>
+                    <span class="field-hint">⚠️ Restricción estricta de privacidad: No almacenar diagnósticos, síntomas ni información médica. Solo observaciones comerciales.</span>
+                </div>
+
+                <div id="newInquiryError" class="modal-error-banner" hidden role="alert"></div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary-action" id="cancelNewInquiryBtn">Cancelar</button>
+                    <button type="submit" class="btn-primary-action" id="saveNewInquirySubmitBtn">Guardar Prospecto</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <!-- ===================================================================== -->
+    <!-- DRAWER / MODAL 2: GESTIONAR PROSPECTO & VINCULAR PEDIDO (PATCH)      -->
+    <!-- ===================================================================== -->
+    <dialog id="manageInquiryModal" class="admin-modal" aria-labelledby="manageInquiryModalTitle">
+        <div class="modal-dialog-content">
+            <div class="modal-header">
+                <div>
+                    <h3 id="manageInquiryModalTitle" class="modal-title">Gestión de Prospecto</h3>
+                    <p class="modal-subtitle" id="manageInquirySubtitle">ID de consulta: —</p>
+                </div>
+                <button type="button" class="btn-close-modal" id="closeManageInquiryModalBtn" aria-label="Cerrar modal">✕</button>
+            </div>
+
+            <!-- Outbound Permission Warning Banner (if false) -->
+            <div id="outboundForbiddenAlert" class="outbound-warning-banner" hidden role="alert">
+                <span class="alert-icon">🚫</span>
+                <div class="alert-text">
+                    <strong>Contacto Saliente Bloqueado:</strong> Este prospecto no tiene autorización de mensajes salientes (<code>outbound_contact_allowed = false</code>). Queda prohibido emitir llamadas o mensajes proactivos. Las transiciones a <em>contacted</em> o <em>checkout_link_sent</em> están deshabilitadas por protección de privacidad.
+                </div>
+            </div>
+
+            <!-- Inquiry Details Summary Card -->
+            <div class="inquiry-summary-grid" id="manageInquirySummary">
+                <div class="summary-field">
+                    <span class="field-title">Contacto</span>
+                    <span class="field-val" id="summaryContactName">—</span>
+                </div>
+                <div class="summary-field">
+                    <span class="field-title">Canal</span>
+                    <span class="field-val" id="summaryChannel">—</span>
+                </div>
+                <div class="summary-field">
+                    <span class="field-title">Teléfono / WhatsApp</span>
+                    <span class="field-val" id="summaryPhone">—</span>
+                </div>
+                <div class="summary-field">
+                    <span class="field-title">Correo</span>
+                    <span class="field-val" id="summaryEmail">—</span>
+                </div>
+                <div class="summary-field">
+                    <span class="field-title">Handle RRSS</span>
+                    <span class="field-val" id="summaryHandle">—</span>
+                </div>
+                <div class="summary-field">
+                    <span class="field-title">Curso de Interés</span>
+                    <span class="field-val" id="summarySku">—</span>
+                </div>
+            </div>
+
+            <!-- Follow-up Update Form -->
+            <form id="manageInquiryForm" class="modal-form" novalidate>
+                <h4 class="section-title">Actualizar Seguimiento Comercial</h4>
+
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label for="manageFollowupStatus">Estado de Seguimiento *</label>
+                        <select id="manageFollowupStatus" name="followup_status" required>
+                            <option value="new_inquiry">Nueva consulta (sin atender)</option>
+                            <option value="contacted" id="optStatusContacted">Contactado (requiere permiso saliente)</option>
+                            <option value="checkout_link_sent" id="optStatusLinkSent">Link de checkout enviado (requiere permiso saliente)</option>
+                            <option value="order_created">Pedido registrado en checkout</option>
+                            <option value="paid_verified">Pago verificado</option>
+                            <option value="enrolled">Matriculado</option>
+                            <option value="closed_no_conversion">Cerrado sin conversión</option>
+                            <option value="do_not_contact">No contactar / Consentimiento revocado</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group flex-1">
+                        <label for="manageObservationCategory">Categoría Comercial</label>
+                        <select id="manageObservationCategory" name="observation_category">
+                            <option value="course_info_requested">Solicitud de información sobre cursos</option>
+                            <option value="pricing_and_pack_comparison">Consulta de precios y pack completo</option>
+                            <option value="payment_method_qr_inquiry">Consulta de forma de pago QR bancario</option>
+                            <option value="checkout_link_dispatched">Enlace de checkout enviado</option>
+                            <option value="awaiting_prospect_reply">Esperando respuesta del prospecto</option>
+                            <option value="order_created_in_checkout">Pedido registrado en checkout</option>
+                            <option value="payment_verification_pending">Verificación bancaria pendiente</option>
+                            <option value="moodle_enrollment_completed">Matrícula en Moodle completada</option>
+                            <option value="no_response_or_postponed">Sin respuesta / Aplazó inscripción</option>
+                            <option value="do_not_contact_requested">Solicitud de baja / No contactar</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label for="manageAssignedOperator">Operador Responsable</label>
+                        <input type="text" id="manageAssignedOperator" name="assigned_operator_id" placeholder="ID de operador asignado">
+                    </div>
+
+                    <div class="form-group flex-1">
+                        <label for="manageNextAction">Próxima Acción</label>
+                        <input type="text" id="manageNextAction" name="next_action" placeholder="ej. Llamar el martes para confirmar abono">
+                    </div>
+
+                    <div class="form-group flex-1">
+                        <label for="manageNextActionAt">Fecha / Hora Próxima Acción</label>
+                        <input type="datetime-local" id="manageNextActionAt" name="next_action_at">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="manageNotes">Observaciones Comerciales Guiadas</label>
+                    <textarea id="manageNotes" name="notes" rows="2" placeholder="Actualizar detalles comerciales sobre horario, dudas o intención de matrícula..."></textarea>
+                </div>
+
+                <!-- ORDER LINKAGE SECTION -->
+                <div class="order-linkage-box">
+                    <h4 class="section-title">Vinculación con Pedido de Checkout</h4>
+                    
+                    <!-- Linked Order Active State -->
+                    <div id="alreadyLinkedBlock" hidden>
+                        <div class="linked-order-badge">
+                            <span class="badge-icon">✓</span>
+                            <span>Vinculado con el <strong>Pedido #<span id="linkedOrderNumberText">—</span></strong> (<span id="linkedOrderStatusText">—</span>)</span>
+                        </div>
+                        
+                        <!-- Relink Toggle -->
+                        <details class="relink-details" id="relinkAccordion">
+                            <summary class="relink-summary">⚠️ Corregir o reasignar vínculo con otro pedido...</summary>
+                            <div class="relink-form-fields">
+                                <p class="relink-warning-text">La reasignación de pedidos vinculados requiere justificación operativa auditada.</p>
+                                <div class="form-row">
+                                    <div class="form-group flex-1">
+                                        <label for="relinkNewOrderId">Nuevo ID de Pedido (UUID)</label>
+                                        <input type="text" id="relinkNewOrderId" placeholder="UUID del nuevo pedido">
+                                    </div>
+                                    <div class="form-group flex-1">
+                                        <label for="relinkReason">Motivo de Reasignación *</label>
+                                        <input type="text" id="relinkReason" placeholder="ej. Prospecto generó segundo pedido definitivo">
+                                    </div>
+                                </div>
+                                <div class="checkbox-group">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="relinkConfirmCheck">
+                                        <span>Confirmo explícitamente la sustitución del vínculo de pedido auditado.</span>
+                                    </label>
+                                </div>
+                                <button type="button" class="btn-secondary-action btn-sm" id="executeRelinkBtn">
+                                    Aplicar Reasignación Excepcional
+                                </button>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- Not Linked: Candidate Matches -->
+                    <div id="notLinkedBlock">
+                        <!-- Ambiguity Alert Banner -->
+                        <div id="ambiguousMatchAlert" class="ambiguous-warning-banner" hidden>
+                            <strong>⚠️ Ambigüedad detectada:</strong> Se encontraron múltiples pedidos coincidentes con este email o teléfono. El sistema <strong>no realiza asignaciones automáticas</strong>. Verifica con el cliente y confirma manualmente el pedido correspondiente:
+                        </div>
+
+                        <!-- Candidates List -->
+                        <div id="candidatesListContainer" class="candidates-container"></div>
+                        
+                        <!-- Manual Order ID Input -->
+                        <div class="manual-link-input-row">
+                            <input type="text" id="manualLinkOrderId" placeholder="O ingresa el ID o N° de pedido a vincular...">
+                            <button type="button" class="btn-secondary-action btn-sm" id="manualLinkBtn">Vincular Manualmente</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="manageInquiryError" class="modal-error-banner" hidden role="alert"></div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn-copy-checkout-link" id="copyCheckoutLinkFromModalBtn">
+                        📋 Copiar Enlace de Checkout con UTM
+                    </button>
+                    <div class="footer-actions-right">
+                        <button type="button" class="btn-secondary-action" id="cancelManageInquiryBtn">Cerrar</button>
+                        <button type="submit" class="btn-primary-action" id="saveManageInquiryBtn">Guardar Cambios</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <!-- ===================================================================== -->
+    <!-- MODAL 3: COORDINACIÓN MANUAL DE QR (POST .../coordination)             -->
+    <!-- ===================================================================== -->
+    <dialog id="coordinationModal" class="admin-modal" aria-labelledby="coordinationModalTitle">
+        <div class="modal-dialog-content modal-content-sm">
+            <div class="modal-header">
+                <div>
+                    <h3 id="coordinationModalTitle" class="modal-title">Registrar Evento de Coordinación</h3>
+                    <p class="modal-subtitle" id="coordinationOrderSubtitle">Pedido: —</p>
+                </div>
+                <button type="button" class="btn-close-modal" id="closeCoordinationModalBtn" aria-label="Cerrar modal">✕</button>
+            </div>
+
+            <form id="coordinationForm" class="modal-form" novalidate>
+                <div class="form-group">
+                    <label for="coordinationEventType">Tipo de Evento Documental *</label>
+                    <select id="coordinationEventType" name="event_type" required>
+                        <option value="qr_sent">QR bancario generado y enviado al comprador</option>
+                        <option value="receipt_received">Comprobante de abono recibido del comprador</option>
+                        <option value="payment_discrepancy">Discrepancia en comprobante de pago reportada</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="coordinationChannel">Canal de Coordinación</label>
+                    <select id="coordinationChannel" name="channel">
+                        <option value="whatsapp">WhatsApp Oficial</option>
+                        <option value="phone_call">Llamada telefónica</option>
+                        <option value="email">Correo electrónico</option>
+                        <option value="other">Otro canal</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="coordinationNotes">Notas Operativas</label>
+                    <textarea id="coordinationNotes" name="notes" rows="2" placeholder="Detalles del envío de QR o recepción del comprobante..."></textarea>
+                </div>
+
+                <div id="coordinationError" class="modal-error-banner" hidden role="alert"></div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary-action" id="cancelCoordinationBtn">Cancelar</button>
+                    <button type="submit" class="btn-primary-action" id="saveCoordinationBtn">Registrar Coordinación</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <!-- ===================================================================== -->
+    <!-- MODAL 4: VERIFICACIÓN BANCARIA DEL PAGO (POST .../verify-payment)      -->
+    <!-- ===================================================================== -->
+    <dialog id="verifyPaymentModal" class="admin-modal" aria-labelledby="verifyPaymentModalTitle">
+        <div class="modal-dialog-content modal-content-sm">
+            <div class="modal-header">
+                <div>
+                    <h3 id="verifyPaymentModalTitle" class="modal-title">Verificación Bancaria del Pago</h3>
+                    <p class="modal-subtitle" id="verifyPaymentOrderSubtitle">Pedido: —</p>
+                </div>
+                <button type="button" class="btn-close-modal" id="closeVerifyPaymentModalBtn" aria-label="Cerrar modal">✕</button>
+            </div>
+
+            <form id="verifyPaymentForm" class="modal-form" novalidate>
+                <div class="verification-notice">
+                    <strong>⚠️ Verificación Humana Nominal:</strong> Esta acción certifica que el operador verificó efectivamente el ingreso del abono en el extracto bancario de Academia Mujer Sana. El número de referencia quedará registrado de forma permanente.
+                </div>
+
+                <div class="form-group">
+                    <label for="verifyBankRef">Referencia Bancaria / N° de Comprobante *</label>
+                    <input type="text" id="verifyBankRef" name="bank_reconciliation_ref" placeholder="ej. BNB-20261115-998877" required>
+                    <span class="field-hint">Número de operación bancaria real del extracto.</span>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label for="verifyBankName">Banco Origen / Destino *</label>
+                        <select id="verifyBankName" name="bank_name" required>
+                            <option value="BNB">Banco Nacional de Bolivia (BNB)</option>
+                            <option value="Banco Union">Banco Unión</option>
+                            <option value="Banco Mercantil Santa Cruz">Banco Mercantil Santa Cruz</option>
+                            <option value="Banco de Credito BCP">Banco de Crédito BCP</option>
+                            <option value="Banco Bisa">Banco Bisa</option>
+                            <option value="Otro">Otro Banco / QR Interbancario</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group flex-1">
+                        <label for="verifyAmountCents">Importe Conciliado (Centavos) *</label>
+                        <input type="number" id="verifyAmountCents" name="reconciled_amount_cents" required readonly>
+                        <span class="field-hint" id="verifyAmountBsHint">Bs —</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="verifyNotes">Notas de la Verificación</label>
+                    <textarea id="verifyNotes" name="notes" rows="2" placeholder="Fecha y hora de acreditación bancaria verificada..."></textarea>
+                </div>
+
+                <div id="verifyPaymentError" class="modal-error-banner" hidden role="alert"></div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary-action" id="cancelVerifyPaymentBtn">Cancelar</button>
+                    <button type="submit" class="btn-primary-action btn-verify" id="saveVerifyPaymentBtn">
+                        Confirmar Pago Verificado
+                    </button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <!-- ===================================================================== -->
+    <!-- MODAL 5: REGISTRO DE MATRÍCULA MANUAL EN MOODLE                        -->
+    <!-- ===================================================================== -->
+    <dialog id="enrollmentModal" class="admin-modal" aria-labelledby="enrollmentModalTitle">
+        <div class="modal-dialog-content modal-content-sm">
+            <div class="modal-header">
+                <div>
+                    <h3 id="enrollmentModalTitle" class="modal-title">Gestión de Matrícula Manual</h3>
+                    <p class="modal-subtitle" id="enrollmentOrderSubtitle">Pedido: —</p>
+                </div>
+                <button type="button" class="btn-close-modal" id="closeEnrollmentModalBtn" aria-label="Cerrar modal">✕</button>
+            </div>
+
+            <form id="enrollmentForm" class="modal-form" novalidate>
+                <div class="moodle-notice">
+                    <span>Plataforma Moodle: <code>cloud.novarum.com.bo</code></span>
+                    <p>Registra el inicio de matriculación o confirma la habilitación final realizada manualmente en el aula virtual.</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="enrollmentActionType">Acción Operativa *</label>
+                    <select id="enrollmentActionType" required>
+                        <option value="start">1. Registrar Inicio de Matrícula (En Proceso)</option>
+                        <option value="confirm">2. Confirmar Habilitación Completa en Moodle (Cumplido)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="enrollmentNotes">Notas de Matrícula / Usuario Moodle</label>
+                    <textarea id="enrollmentNotes" rows="2" placeholder="ej. Usuario creado con email de la compradora y enrolado en el curso..."></textarea>
+                </div>
+
+                <div id="enrollmentError" class="modal-error-banner" hidden role="alert"></div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary-action" id="cancelEnrollmentBtn">Cancelar</button>
+                    <button type="submit" class="btn-primary-action btn-moodle" id="saveEnrollmentBtn">
+                        Registrar Matrícula
+                    </button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <!-- Core Scripts -->
+    <script type="module" src="js/admin.js"></script>
+</body>
+</html>
