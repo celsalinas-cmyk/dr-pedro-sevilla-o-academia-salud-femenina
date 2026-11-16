@@ -237,6 +237,7 @@ test('Gate 2-A3-B2 (BL-05) — Commercial Inbox UI & Operational Workflows Suite
     assert.ok(js.includes('/api/v1/admin/orders'), 'js/admin.js must call orders endpoint');
     assert.ok(js.includes('x-csrf-token'), 'js/admin.js must include x-csrf-token header on mutating requests');
     assert.ok(js.includes('outbound_contact_allowed'), 'js/admin.js must enforce outbound_contact_allowed guardrails');
+    assert.ok(!js.includes('innerHTML'), 'js/admin.js must never use innerHTML to guarantee display security and prevent XSS');
   });
 
   await t.test('2. Real Headless Browser (Chrome CDP) E2E Verification of All BL-05 Controls', async (subT) => {
@@ -606,6 +607,16 @@ test('Gate 2-A3-B2 (BL-05) — Commercial Inbox UI & Operational Workflows Suite
       );
       assert.ok(candidateCardsCount >= 1, 'Candidate order match card must be rendered in manage modal');
 
+      // Verify contract mapping: order number, product title, and formatted amount without undefined or NaN
+      const candidateText = await cdp.evaluate(
+        'document.querySelector("#candidatesListContainer .candidate-card .candidate-info").textContent'
+      );
+      assert.ok(!candidateText.includes('undefined'), `Candidate display must not contain 'undefined', got: ${candidateText}`);
+      assert.ok(!candidateText.includes('NaN'), `Candidate display must not contain 'NaN', got: ${candidateText}`);
+      assert.ok(candidateText.includes('Pedido #'), `Candidate display must show order number, got: ${candidateText}`);
+      assert.ok(candidateText.includes('199.00'), `Candidate display must show formatted currency amount (199.00), got: ${candidateText}`);
+      assert.ok(candidateText.includes('Coincide por'), `Candidate display must explain match reason, got: ${candidateText}`);
+
       // Click link button to link candidate order
       await cdp.evaluate(`
         const linkBtn = document.querySelector("#candidatesListContainer .candidate-card button");
@@ -653,6 +664,13 @@ test('Gate 2-A3-B2 (BL-05) — Commercial Inbox UI & Operational Workflows Suite
         document.getElementById("verifyPaymentForm").dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
       `);
       await new Promise((r) => setTimeout(r, 1000));
+
+      // Verify safe orders table rendering: ensure all cells are free of undefined/NaN
+      const orderCells = await cdp.evaluate(`
+        Array.from(document.querySelectorAll("#ordersTableBody tr td")).map(td => td.textContent)
+      `);
+      assert.ok(orderCells.length > 0, 'Orders table must render table cells');
+      assert.ok(orderCells.every((t) => !t.includes('undefined') && !t.includes('NaN')), 'Orders table cells must never contain undefined or NaN');
 
       // Status should now be 'Pago Verificado' and action button becomes 'Iniciar Matrícula' / 'Matricular Moodle'
       const enrollBtnExists = await cdp.evaluate(`
@@ -707,7 +725,93 @@ test('Gate 2-A3-B2 (BL-05) — Commercial Inbox UI & Operational Workflows Suite
       );
       assert.equal(hasHorizontalOverflow, false, 'admin.html must have zero horizontal overflow on mobile 360px');
 
-      // 9. Logout Test
+      // 9. Contract Compatibility & XSS-Safe DOM Rendering Unit Checks
+      const contractCheck = await cdp.evaluate(`
+        (() => {
+          // 1. Candidate match with real backend response schema: total_amount_minor, sku, no product_title
+          const testInquiry1 = {
+            id: 'inq-test-contract-1',
+            linked_order_id: null,
+            order_match_ambiguous: false,
+            order_match_candidates: [
+              {
+                order_id: 'ord-uuid-001',
+                order_number: 'NOV-2026-7788',
+                status: 'pending_payment',
+                total_amount_minor: 19900,
+                currency: 'BOB',
+                sku: 'mujer-informada-4',
+                matched_by: 'email_and_phone',
+              },
+              {
+                order_id: 'ord-uuid-002',
+                order_number: 'NOV-2026-9900',
+                status: 'pending_payment',
+                total_amount_minor: 8900,
+                currency: 'BOB',
+                sku: 'endometriosis',
+                matched_by: 'email',
+              }
+            ],
+          };
+
+          window.NovarumAdmin.renderOrderLinkageSection(testInquiry1);
+          const cards = Array.from(document.querySelectorAll("#candidatesListContainer .candidate-card"));
+          const text1 = cards[0]?.querySelector(".candidate-info")?.textContent || '';
+          const text2 = cards[1]?.querySelector(".candidate-info")?.textContent || '';
+
+          // 2. Candidate match with potential XSS payloads
+          const testInquiryXss = {
+            id: 'inq-test-xss',
+            linked_order_id: null,
+            order_match_ambiguous: false,
+            order_match_candidates: [
+              {
+                order_id: 'ord-uuid-xss',
+                order_number: '<script id="cand-xss-script">alert(1)</script>',
+                status: 'pending_payment',
+                total_amount_minor: 4500,
+                currency: '<b id="cand-xss-cur">BOB</b>',
+                sku: 'vaginosis',
+                matched_by: '<img id="cand-xss-img" src=x onerror=alert(2)>',
+              }
+            ],
+          };
+
+          window.NovarumAdmin.renderOrderLinkageSection(testInquiryXss);
+          const xssScriptExists = Boolean(document.getElementById("cand-xss-script"));
+          const xssImgExists = Boolean(document.getElementById("cand-xss-img"));
+          const xssCurExists = Boolean(document.getElementById("cand-xss-cur"));
+          const xssText = document.querySelector("#candidatesListContainer .candidate-card .candidate-info")?.textContent || '';
+
+          return {
+            text1,
+            text2,
+            xssScriptExists,
+            xssImgExists,
+            xssCurExists,
+            xssText,
+          };
+        })()
+      `);
+
+      assert.ok(!contractCheck.text1.includes('undefined') && !contractCheck.text1.includes('NaN'), 'Candidate 1 must not contain undefined or NaN');
+      assert.ok(contractCheck.text1.includes('NOV-2026-7788'), 'Candidate 1 must display order number');
+      assert.ok(contractCheck.text1.includes('Mujer Informada'), 'Candidate 1 must display resolved product title from SKU');
+      assert.ok(contractCheck.text1.includes('199.00'), 'Candidate 1 must format total_amount_minor (19900 -> 199.00)');
+      assert.ok(contractCheck.text1.includes('email y teléfono'), 'Candidate 1 must display formatted matched_by label');
+
+      assert.ok(!contractCheck.text2.includes('undefined') && !contractCheck.text2.includes('NaN'), 'Candidate 2 must not contain undefined or NaN');
+      assert.ok(contractCheck.text2.includes('NOV-2026-9900'), 'Candidate 2 must display order number');
+      assert.ok(contractCheck.text2.includes('Endometriosis'), 'Candidate 2 must display resolved product title from SKU');
+      assert.ok(contractCheck.text2.includes('89.00'), 'Candidate 2 must format total_amount_minor (8900 -> 89.00)');
+
+      assert.equal(contractCheck.xssScriptExists, false, 'Candidate rendering must never execute or inject <script> tags');
+      assert.equal(contractCheck.xssImgExists, false, 'Candidate rendering must never inject <img> tags');
+      assert.equal(contractCheck.xssCurExists, false, 'Candidate rendering must never inject <b> tags');
+      assert.ok(contractCheck.xssText.includes('<script'), 'Malicious payloads must be safely escaped as plain text content');
+
+      // 10. Logout Test
       await cdp.evaluate('document.getElementById("logoutBtn").click()');
       await new Promise((r) => setTimeout(r, 600));
 

@@ -258,10 +258,22 @@
   // TAB 1: PROSPECTOS & REDES SOCIALES (MINI CRM)
   // =========================================================================
 
+  function setTableStatusRow(tbody, message, isError = false) {
+    tbody.replaceChildren();
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 7;
+    td.className = 'td-empty';
+    if (isError) td.style.color = '#991b1b';
+    td.textContent = message;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+
   async function loadInquiries() {
     if (!currentSession) return;
     const tbody = document.getElementById('inquiriesTableBody');
-    tbody.innerHTML = '<tr><td colspan="7" class="td-empty">Cargando prospectos...</td></tr>';
+    setTableStatusRow(tbody, 'Cargando prospectos...');
 
     const channel = document.getElementById('filterInquiryChannel').value;
     const sku = document.getElementById('filterInquirySku').value;
@@ -278,7 +290,7 @@
       renderInquiriesTable();
       updateInquiriesSummaryPills();
     } catch (err) {
-      tbody.innerHTML = `<tr><td colspan="7" class="td-empty" style="color: #991b1b;">Error al cargar prospectos: ${err.message}</td></tr>`;
+      setTableStatusRow(tbody, `Error al cargar prospectos: ${err.message || 'Error desconocido'}`, true);
     }
   }
 
@@ -311,7 +323,7 @@
 
   function renderInquiriesTable() {
     const tbody = document.getElementById('inquiriesTableBody');
-    tbody.innerHTML = '';
+    tbody.replaceChildren();
 
     const searchTerm = (document.getElementById('searchInquiryText').value || '').toLowerCase().trim();
 
@@ -326,7 +338,7 @@
     });
 
     if (filtered.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="td-empty">No se encontraron prospectos con los filtros actuales.</td></tr>';
+      setTableStatusRow(tbody, 'No se encontraron prospectos con los filtros actuales.');
       return;
     }
 
@@ -625,13 +637,15 @@
     const notLinked = document.getElementById('notLinkedBlock');
     const ambiguousAlert = document.getElementById('ambiguousMatchAlert');
     const candidatesContainer = document.getElementById('candidatesListContainer');
-    candidatesContainer.innerHTML = '';
+    candidatesContainer.replaceChildren();
 
     if (inquiry.linked_order_id) {
       alreadyLinked.hidden = false;
       notLinked.hidden = true;
-      document.getElementById('linkedOrderNumberText').textContent = inquiry.linked_order_number || inquiry.linked_order_id.slice(0, 8);
-      document.getElementById('linkedOrderStatusText').textContent = inquiry.linked_order_status || 'Vinculado';
+      const linkedNum = inquiry.linked_order_number || (inquiry.linked_order && inquiry.linked_order.order_number) || inquiry.linked_order_id.slice(0, 8);
+      const linkedStat = inquiry.linked_order_status || (inquiry.linked_order && inquiry.linked_order.status) || 'Vinculado';
+      document.getElementById('linkedOrderNumberText').textContent = linkedNum;
+      document.getElementById('linkedOrderStatusText').textContent = linkedStat;
       document.getElementById('relinkAccordion').open = false;
       document.getElementById('relinkNewOrderId').value = '';
       document.getElementById('relinkReason').value = '';
@@ -641,11 +655,7 @@
       notLinked.hidden = false;
 
       const candidates = inquiry.order_match_candidates || [];
-      if (inquiry.order_match_ambiguous) {
-        ambiguousAlert.hidden = false;
-      } else {
-        ambiguousAlert.hidden = true;
-      }
+      ambiguousAlert.hidden = !inquiry.order_match_ambiguous;
 
       if (candidates.length > 0) {
         for (const cand of candidates) {
@@ -654,7 +664,37 @@
 
           const infoDiv = document.createElement('div');
           infoDiv.className = 'candidate-info';
-          infoDiv.innerHTML = `<strong>Pedido #${cand.order_number}</strong> — ${cand.product_title} (Bs ${cand.total_amount_cents / 100}) <span class="candidate-match-tag">Coincide por ${cand.matched_by}</span>`;
+
+          // Safe DOM node creation: strong tag for order number
+          const strongOrder = document.createElement('strong');
+          const orderNum = cand.order_number || (cand.order_id ? cand.order_id.slice(0, 8) : 'S/N');
+          strongOrder.textContent = `Pedido #${orderNum}`;
+
+          // Resolve product title from title, SKU dictionary, or raw SKU
+          const prodTitle = cand.product_title || PRODUCTS[cand.sku] || cand.sku || 'Curso NOVARUM';
+          const currency = cand.currency || 'BOB';
+
+          // Resolve amount strictly: support total_amount_minor and total_amount_cents without NaN
+          const rawAmount = cand.total_amount_minor != null ? cand.total_amount_minor : cand.total_amount_cents;
+          const numAmount = Number(rawAmount);
+          const formattedAmount = Number.isFinite(numAmount) ? (numAmount / 100).toFixed(2) : '0.00';
+
+          const matchLabelMap = {
+            email_and_phone: 'email y teléfono',
+            email: 'email',
+            phone: 'teléfono',
+          };
+          const matchLabel = matchLabelMap[cand.matched_by] || cand.matched_by || 'contacto';
+
+          const descText = document.createTextNode(` — ${prodTitle} (${currency} ${formattedAmount}) `);
+
+          const matchTag = document.createElement('span');
+          matchTag.className = 'candidate-match-tag';
+          matchTag.textContent = `Coincide por ${matchLabel}`;
+
+          infoDiv.appendChild(strongOrder);
+          infoDiv.appendChild(descText);
+          infoDiv.appendChild(matchTag);
 
           const linkBtn = document.createElement('button');
           linkBtn.type = 'button';
@@ -667,7 +707,11 @@
           candidatesContainer.appendChild(card);
         }
       } else {
-        candidatesContainer.innerHTML = '<span style="font-size: 0.8rem; color: #64748b;">No se encontraron pedidos con el mismo email o teléfono.</span>';
+        const emptySpan = document.createElement('span');
+        emptySpan.style.fontSize = '0.8rem';
+        emptySpan.style.color = '#64748b';
+        emptySpan.textContent = 'No se encontraron pedidos con el mismo email o teléfono.';
+        candidatesContainer.appendChild(emptySpan);
       }
     }
   }
@@ -798,7 +842,7 @@
   async function loadOrders() {
     if (!currentSession) return;
     const tbody = document.getElementById('ordersTableBody');
-    tbody.innerHTML = '<tr><td colspan="7" class="td-empty">Cargando pedidos...</td></tr>';
+    setTableStatusRow(tbody, 'Cargando pedidos...');
 
     const status = document.getElementById('filterOrderStatus').value;
     const params = new URLSearchParams();
@@ -824,13 +868,13 @@
         badge.hidden = true;
       }
     } catch (err) {
-      tbody.innerHTML = `<tr><td colspan="7" class="td-empty" style="color: #991b1b;">Error al cargar pedidos: ${err.message}</td></tr>`;
+      setTableStatusRow(tbody, `Error al cargar pedidos: ${err.message || 'Error desconocido'}`, true);
     }
   }
 
   function renderOrdersTable() {
     const tbody = document.getElementById('ordersTableBody');
-    tbody.innerHTML = '';
+    tbody.replaceChildren();
 
     const searchTerm = (document.getElementById('searchOrderText').value || '').toLowerCase().trim();
 
@@ -844,7 +888,7 @@
     });
 
     if (filtered.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="td-empty">No se encontraron pedidos con los filtros actuales.</td></tr>';
+      setTableStatusRow(tbody, 'No se encontraron pedidos con los filtros actuales.');
       return;
     }
 
@@ -919,7 +963,14 @@
       // 6. Reconciliation Reference
       const tdRef = document.createElement('td');
       if (order.bank_reconciliation_ref) {
-        tdRef.innerHTML = `<strong>${order.bank_name || 'Banco'}</strong><div style="font-size: 0.75rem; color: #64748b;">${order.bank_reconciliation_ref}</div>`;
+        const bankStrong = document.createElement('strong');
+        bankStrong.textContent = order.bank_name || 'Banco';
+        const refDiv = document.createElement('div');
+        refDiv.style.fontSize = '0.75rem';
+        refDiv.style.color = '#64748b';
+        refDiv.textContent = order.bank_reconciliation_ref;
+        tdRef.appendChild(bankStrong);
+        tdRef.appendChild(refDiv);
       } else {
         tdRef.textContent = '—';
         tdRef.style.color = '#94a3b8';
@@ -1271,5 +1322,7 @@
     apiFetch,
     loadInquiries,
     loadOrders,
+    renderOrderLinkageSection,
+    renderOrdersTable,
   };
 })();
